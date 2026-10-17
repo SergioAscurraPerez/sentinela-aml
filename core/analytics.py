@@ -81,6 +81,10 @@ def detect_structuring(w: pd.DataFrame, account: str, pol: dict) -> dict | None:
     inc = w[(w.receiver == account) & (w.amount >= band * thr) & (w.amount < thr)]
     if len(inc) < pol["deteccion"]["estructuracion_min_operaciones"]:
         return None
+    # "amontonamiento" justo bajo el umbral: la franja 85-100% debe estar mucho más poblada que la 70-85%
+    below = w[(w.receiver == account) & (w.amount >= 0.70 * thr) & (w.amount < band * thr)]
+    if len(inc) < 2 * max(len(below), 1):
+        return None
     s = inc.set_index("timestamp").sort_index()
     roll = s.amount.rolling(f"{days}D").count()
     best_end = roll.idxmax()
@@ -100,6 +104,10 @@ def detect_fan(w: pd.DataFrame, account: str, pol: dict) -> dict | None:
     res = {}
     for side, col, other in (("fan_in", "receiver", "sender"), ("fan_out", "sender", "receiver")):
         sub = w[w[col] == account]
+        if sub.empty:
+            continue
+        first = sub.groupby(other).timestamp.min()
+        sub = sub[sub[other].map(first) >= sub.timestamp.min() + pd.Timedelta(days=7)] if len(first) > k * 2 else sub
         if sub.empty:
             continue
         by_day = sub.groupby(sub.timestamp.dt.date)[other].nunique()
@@ -145,7 +153,7 @@ def detect_pass_through(w: pd.DataFrame, account: str, pol: dict) -> dict | None
         return None
     ratio = out.amount.sum() / max(inc.amount.sum(), 1)
     lag_h = (out.timestamp.max() - inc.timestamp.max()).total_seconds() / 3600
-    if ratio >= pol["deteccion"]["pass_through_ratio"] and lag_h <= 24 * 7:
+    if pol["deteccion"]["pass_through_ratio"] <= ratio <= 1.25 and lag_h <= 24 * 7:
         intl = out.payment_type.astype(str).str.contains("internacional").any()
         return {"ratio_salida_entrada": round(float(ratio), 2), "horas_tras_ultimo_ingreso": round(lag_h, 1),
                 "salida_internacional": bool(intl), "evidencia": out.tx_id.tolist()[:10]}
@@ -231,8 +239,12 @@ def detect_behaviour_change(w: pd.DataFrame, account: str, alert_date: str, pol:
     z = (cur - mu) / sd
     new_types = sorted(set(last.payment_type.astype(str)) - set(prev.payment_type.astype(str)))
     new_curr = sorted(set(last.currency.astype(str)) - set(prev.currency.astype(str)))
-    if z >= pol["deteccion"].get("cambio_z", 3.0) and cur >= 2 * max(mu, 1) or (new_types and cur > mu * 1.5 and len(last) >= 2):
-        return {"z": round(z, 1), "semana_actual": cur, "media_semanal": round(mu, 2),
+    seen = set(prev.sender) | set(prev.receiver)
+    cps = (set(last.sender) | set(last.receiver)) - {account}
+    new_cp = len(cps - seen) / max(len(cps), 1)
+    if new_cp >= 0.5 and ((z >= pol["deteccion"].get("cambio_z", 3.0) and cur >= 2 * max(mu, 1))
+                          or (new_types and cur > mu * 1.5 and len(last) >= 2)):
+        return {"z": round(z, 1), "contrapartes_nuevas": round(new_cp, 2), "semana_actual": cur, "media_semanal": round(mu, 2),
                 "tipos_pago_nuevos": new_types, "monedas_nuevas": new_curr, "evidencia": last.tx_id.tolist()[:30]}
     return None
 
@@ -243,3 +255,57 @@ def peak_30d_inflow(w: pd.DataFrame, account: str) -> float:
         return 0.0
     s = inc.set_index("timestamp").sort_index().amount
     return float(s.rolling("30D").sum().max())
+
+
+def detect_unfunded_dispersion(w: pd.DataFrame, account: str, pol: dict) -> dict | None:
+    """Dispersión sin fondeo visible: reparte a muchas cuentas DISTINTAS (casi una transferencia por destino)
+    sin ingresos que lo expliquen. Típico de fan-out / bipartite / scatter."""
+    out, inc = w[w.sender == account], w[w.receiver == account]
+    if len(out) < 5:
+        return None
+    dist = out.receiver.nunique()
+    if dist >= 5 and dist / len(out) >= 0.6 and inc.amount.sum() < 0.2 * out.amount.sum():
+        return {"destinos_distintos": int(dist), "transferencias": int(len(out)),
+                "fondeo_visible_pct": round(float(inc.amount.sum() / max(out.amount.sum(), 1)) * 100, 1),
+                "evidencia": out.tx_id.tolist()[:30]}
+    return None
+
+
+def detect_cash_burst(w: pd.DataFrame, account: str, pol: dict) -> dict | None:
+    """Movimientos en efectivo seguidos (depósitos o retiros): >= 5 en 7 días."""
+    cash = w[w.payment_type.astype(str).str.contains("cash|efectivo", case=False)]
+    if len(cash) < 5:
+        return None
+    s = cash.set_index("timestamp").sort_index()
+    n7 = s.amount.rolling("7D").count()
+    if n7.max() < 5:
+        return None
+    end = n7.idxmax()
+    win = s.loc[end - pd.Timedelta(days=7): end]
+    tipo = "retiros" if win.payment_type.astype(str).str.contains("withdrawal|retiro", case=False).mean() > 0.5 else "depósitos"
+    return {"n_depositos": int(len(win)), "tipo": tipo, "total": float(win.amount.sum()), "evidencia": win.tx_id.tolist()}
+
+
+def detect_cross_border(w: pd.DataFrame, account: str, pol: dict) -> dict | None:
+    out = w[w.sender == account]
+    if len(out) < 3:
+        return None
+    cb = out[out.payment_type.astype(str).str.contains("cross-border|internacional", case=False)]
+    share = len(cb) / len(out)
+    if len(cb) >= 3 and share >= 0.3:
+        return {"pct": round(share * 100), "n": int(len(cb)), "destinos": int(cb.receiver.nunique()),
+                "evidencia": cb.tx_id.tolist()[:20]}
+    return None
+
+
+def detect_sudden_activity(w: pd.DataFrame, account: str, alert_date: str) -> dict | None:
+    """Cuenta sin historial previo que de pronto concentra actividad (primer movimiento en los últimos 10 días)."""
+    df = load_tx()
+    mine = df[(df.sender == account) | (df.receiver == account)]
+    if mine.empty or len(w) < 5:
+        return None
+    first = mine.timestamp.min()
+    end = pd.Timestamp(alert_date) + pd.Timedelta(days=1)
+    if first >= end - pd.Timedelta(days=10):
+        return {"primer_movimiento": str(first)[:10], "operaciones": int(len(w)), "evidencia": w.tx_id.tolist()[:20]}
+    return None

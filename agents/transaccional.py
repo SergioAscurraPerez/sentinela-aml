@@ -26,6 +26,10 @@ class AgenteTransaccional(Agent):
         det["smurfing"] = A.detect_smurfing(w, acc, pol)
         det["concentracion_dispersion"] = A.detect_gather_scatter(w, acc, pol)
         det["cambio_comportamiento"] = A.detect_behaviour_change(w, acc, case.alert["fecha"], pol)
+        det["dispersion_sin_fondeo"] = A.detect_unfunded_dispersion(w, acc, pol)
+        det["efectivo_recurrente"] = A.detect_cash_burst(w, acc, pol)
+        det["transfronterizo"] = A.detect_cross_border(w, acc, pol)
+        det["actividad_subita"] = A.detect_sudden_activity(w, acc, case.alert["fecha"])
         fan = A.detect_fan(w, acc, pol) or {}
         det.update(fan)
         det = {k: v for k, v in det.items() if v}
@@ -51,7 +55,9 @@ class AgenteTransaccional(Agent):
         expl = data.get("explicaciones") or fb["explicaciones"]
 
         sev = {"structuring": 0.8, "cycle": 0.85, "pass_through": 0.6, "fan_in": 0.5, "fan_out": 0.4,
-               "smurfing": 0.75, "concentracion_dispersion": 0.7, "cambio_comportamiento": 0.55}
+               "smurfing": 0.75, "concentracion_dispersion": 0.7, "cambio_comportamiento": 0.55,
+               "dispersion_sin_fondeo": 0.6, "efectivo_recurrente": 0.55, "transfronterizo": 0.45,
+               "actividad_subita": 0.35}
         out = []
         for k, v in det.items():
             s = sev.get(k, 0.4)
@@ -97,6 +103,15 @@ class AgenteTransaccional(Agent):
         if k == "cambio_comportamiento":
             extra = f"; tipos de pago nuevos: {', '.join(v['tipos_pago_nuevos'])}" if v["tipos_pago_nuevos"] else ""
             return f"Cambio de comportamiento: última semana {amount_band(v['semana_actual'])} (z = {v['z']}){extra}"
+        if k == "dispersion_sin_fondeo":
+            return (f"Dispersión sin fondeo: {v['transferencias']} transferencias a {v['destinos_distintos']} cuentas "
+                    f"distintas; solo {v['fondeo_visible_pct']}% tiene ingreso visible que lo explique")
+        if k == "efectivo_recurrente":
+            return f"Efectivo recurrente: {v['n_depositos']} {v['tipo']} en efectivo en 7 días ({amount_band(v['total'])})"
+        if k == "transfronterizo":
+            return f"Transfronterizo: {v['pct']}% de las salidas van al exterior ({v['n']} envíos a {v['destinos']} cuentas)"
+        if k == "actividad_subita":
+            return f"Actividad súbita: cuenta sin historial previo (primer movimiento {v['primer_movimiento']}) con {v['operaciones']} operaciones"
         if k in ("fan_in", "fan_out"):
             return f"{k}: {v['contrapartes_dia']} contrapartes distintas en un día ({v['dia']})"
         return k
@@ -113,4 +128,8 @@ class AgenteTransaccional(Agent):
             "smurfing": "Muchos ingresos pequeños de distintas cuentas que juntos superan el umbral: pitufeo.",
             "concentracion_dispersion": "Los fondos se concentran y se reparten en pocas horas: la cuenta actúa como nodo de paso.",
             "cambio_comportamiento": "El volumen o el tipo de operaciones de la última semana no se parece al historial de la cuenta.",
+            "dispersion_sin_fondeo": "Reparte dinero a muchos destinos distintos sin que se vea de dónde salió: el origen de fondos no está explicado.",
+            "efectivo_recurrente": "Depósitos en efectivo seguidos: el efectivo es difícil de rastrear y se usa para fraccionar.",
+            "transfronterizo": "Una parte relevante de las salidas va al exterior, lo que dificulta el seguimiento.",
+            "actividad_subita": "Cuenta sin historial que de pronto concentra operaciones: patrón típico de cuentas mula.",
         }.get(k, "Patrón detectado por regla.")

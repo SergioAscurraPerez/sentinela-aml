@@ -15,7 +15,7 @@ autonomia:
 # Triaje por confianza (diapositivas 5-6). Ninguna zona cierra sola: "cierre sugerido" lo aprueba un humano.
 triaje:
   cierre_sugerido: {riesgo_max: 0.25, confianza_min: 0.75}
-  escalamiento: {riesgo_min: 0.70}
+  escalamiento: {riesgo_min: 0.75}
   muestreo_qa_cierres: 0.10      # % de cierres sugeridos que igual van a revisión humana (control de calidad)
 
 # "Entra un humano aunque el porcentaje sea alto si..." (diapositiva 6)
