@@ -326,6 +326,7 @@ def render_client(aid: str) -> None:
         run_agents(aid, grid)
         st.rerun()
     case = o.cases[aid]
+    graph_block(aid, case)
     with st.expander("🤖 Equipo de agentes que analizó al cliente", expanded=False):
         st.markdown(ui.agent_grid(agent_state_from_log(o.log.list(aid))), unsafe_allow_html=True)
     steps_block(aid)
@@ -367,7 +368,6 @@ def render_client(aid: str) -> None:
     with left:
         findings_block(aid, case, ["riesgo", "mitigante", "respuesta"], ("riesgo", "mitigante", "respuesta"))
         ficha_block(case)
-        graph_block(aid, case)
         findings_block(aid, case, ["norma", "info"], ())
     with right:
         decision_block(aid, case, zona)

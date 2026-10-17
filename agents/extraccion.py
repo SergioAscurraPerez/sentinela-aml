@@ -85,6 +85,7 @@ class AgenteExtraccion(Agent):
         base = (f"Documento '{doc['nombre']}' ({data.get('tipo_documento')}, {data.get('concepto')}) declara "
                 f"{amount_band(declarado_usd)} USD vs {amount_band(recibido_usd)} USD recibidos en 30 días")
         extra = {"sha256": doc["sha256"], "cobertura": round(cobertura, 2), "concepto": data.get("concepto"),
+                 "documento": doc["nombre"], "declarado_usd": round(declarado_usd, 2),
                  "modo_llm": meta["modo"], "montos_encontrados": len(amounts)}
         src = f"{self.name} ({meta['modo']}) · sha256 {doc['sha256'][:12]}…"
         why = (f"El documento se leyó con huella sha256 {doc['sha256']}. El LLM vio el texto enmascarado; la comparación "
