@@ -75,7 +75,10 @@ llm:
   modelos_openrouter:
     - nvidia/nemotron-3-super-120b-a12b:free   # ~12 s por llamada, buen español
     - google/gemma-4-31b-it:free
-    - openrouter/free                          # enrutador gratuito de OpenRouter (último recurso)
+    - openrouter/free                          # enrutador gratuito de OpenRouter
+  # Respaldo de PAGO: solo si los 3 gratuitos fallan (~US$0.001 por cliente; tope de la clave: US$50).
+  # Dejar vacío para operar 100% gratis.
+  respaldo_pago: google/gemini-2.5-flash-lite
   timeout_s: 45
   usar_cache: false            # demo 100% en vivo: cada razonamiento se genera en el momento
 

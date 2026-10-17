@@ -60,6 +60,9 @@ class LocalLLM:
         if self.solo_gratis:  # protección de costos: nunca se llama a un modelo de pago por error
             models = [m for m in models if _is_free(m)] or ["openrouter/free"]
         self.openrouter_models = models
+        # Respaldo de pago OPCIONAL: solo se usa si TODOS los gratuitos fallan (429, timeout, JSON inválido)
+        self.paid_fallback = cfg.get("respaldo_pago") or None
+        self.last_model: str | None = None
         self.openrouter_model = models[0]      # el último que respondió bien (se mantiene mientras funcione)
         self.timeout = cfg.get("timeout_s", 60)
         self.use_cache = cfg.get("usar_cache", True)
@@ -111,12 +114,14 @@ class LocalLLM:
         return _parse_json(r.json()["message"]["content"])
 
     def _call_openrouter(self, system: str, user: str) -> dict:
-        """Prueba los modelos gratuitos en orden; si uno está saturado (429) o falla, pasa al siguiente."""
+        """Prueba los modelos gratuitos en orden; si uno está saturado (429) o falla, pasa al siguiente.
+        Solo si todos los gratuitos fallan, usa el respaldo de pago (si está configurado)."""
         order = [self.openrouter_model] + [m for m in self.openrouter_models if m != self.openrouter_model]
+        order = [m for m in order if not (self.solo_gratis and not _is_free(m))]
+        if self.paid_fallback:
+            order.append(self.paid_fallback)
         last: Exception | None = None
         for model in order:
-            if self.solo_gratis and not _is_free(model):
-                continue
             try:
                 r = requests.post(f"{OPENROUTER_URL}/chat/completions", timeout=self.timeout, headers={
                     "Authorization": f"Bearer {_secret('OPENROUTER_API_KEY')}",
@@ -127,9 +132,11 @@ class LocalLLM:
                                  {"role": "user", "content": user}]})
                 r.raise_for_status()
                 data = _parse_json(r.json()["choices"][0]["message"]["content"])
-                self.openrouter_model = model
+                self.last_model = model
+                if _is_free(model):   # el de pago nunca queda "fijo": la próxima llamada vuelve a los gratuitos
+                    self.openrouter_model = model
                 return data
-            except Exception as exc:  # 429, timeout, JSON inválido -> siguiente modelo gratuito
+            except Exception as exc:  # 429, timeout, JSON inválido -> siguiente modelo
                 last = exc
         raise last or RuntimeError("sin modelos gratuitos configurados")
 
@@ -162,7 +169,10 @@ class LocalLLM:
             data = {**fallback, **{k: v for k, v in data.items() if v not in (None, "", [])}}
             self._cache[key] = data
             CACHE.write_text(json.dumps(self._cache, ensure_ascii=False, indent=1), encoding="utf-8")
-            self.log.add(agent, "llm.llamada", {"modo": "llm", "proveedor": prov, "lo_que_vio_el_modelo": seen,
+            used = self.last_model if prov == "openrouter" else self.ollama_model
+            self.log.add(agent, "llm.llamada", {"modo": "llm", "proveedor": prov, "modelo_usado": used,
+                                                "respaldo_pago": bool(used and not _is_free(used) and prov == "openrouter"),
+                                                "lo_que_vio_el_modelo": seen,
                                                 "respuesta": data}, latency_ms=ms)
             return data, {"modo": "llm", "proveedor": prov, "latency_ms": ms}
         except Exception as exc:

@@ -238,6 +238,8 @@ def narrate(events: list[dict], agent: str | None = None) -> list[dict]:
             txt = "Empezó a trabajar."
         elif k == "llm.llamada":
             modo = d.get("modo")
+            if modo == "llm" and d.get("respaldo_pago"):
+                ms += " · los modelos gratuitos estaban saturados: respondió el respaldo de pago"
             txt = {"llm": f"Le pidió al modelo de lenguaje que explique lo encontrado{ms}. Solo le mostró datos "
                           "pseudonimizados (míralo en *Privacidad y auditoría*).",
                    "cache": "Reutilizó una explicación del modelo ya generada (caché).",
