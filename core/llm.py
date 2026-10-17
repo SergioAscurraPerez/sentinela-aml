@@ -45,13 +45,22 @@ def _parse_json(text: str) -> dict:
         return json.loads(text[text.find("{"): text.rfind("}") + 1])
 
 
+def _is_free(model: str) -> bool:
+    return model.endswith(":free") or model == "openrouter/free"
+
+
 class LocalLLM:
     def __init__(self, policy: dict, log: EventLog):
         cfg = policy.get("llm", {})
         self.provider_cfg = cfg.get("proveedor", "auto")
         self.url = cfg.get("url", "http://localhost:11434").rstrip("/")
         self.ollama_model = cfg.get("modelo", "qwen2.5:3b")
-        self.openrouter_model = cfg.get("modelo_openrouter", "google/gemini-2.5-flash-lite")
+        models = cfg.get("modelos_openrouter") or [cfg.get("modelo_openrouter", "openrouter/free")]
+        self.solo_gratis = cfg.get("solo_modelos_gratis", True)
+        if self.solo_gratis:  # protección de costos: nunca se llama a un modelo de pago por error
+            models = [m for m in models if _is_free(m)] or ["openrouter/free"]
+        self.openrouter_models = models
+        self.openrouter_model = models[0]      # el último que respondió bien (se mantiene mientras funcione)
         self.timeout = cfg.get("timeout_s", 60)
         self.use_cache = cfg.get("usar_cache", True)
         self.log = log
@@ -102,15 +111,27 @@ class LocalLLM:
         return _parse_json(r.json()["message"]["content"])
 
     def _call_openrouter(self, system: str, user: str) -> dict:
-        r = requests.post(f"{OPENROUTER_URL}/chat/completions", timeout=self.timeout, headers={
-            "Authorization": f"Bearer {_secret('OPENROUTER_API_KEY')}",
-            "X-Title": "Sentinela AML"}, json={
-            "model": self.openrouter_model, "temperature": 0.1,
-            "response_format": {"type": "json_object"},
-            "messages": [{"role": "system", "content": system + "\nResponde SOLO con un objeto JSON válido."},
-                         {"role": "user", "content": user}]})
-        r.raise_for_status()
-        return _parse_json(r.json()["choices"][0]["message"]["content"])
+        """Prueba los modelos gratuitos en orden; si uno está saturado (429) o falla, pasa al siguiente."""
+        order = [self.openrouter_model] + [m for m in self.openrouter_models if m != self.openrouter_model]
+        last: Exception | None = None
+        for model in order:
+            if self.solo_gratis and not _is_free(model):
+                continue
+            try:
+                r = requests.post(f"{OPENROUTER_URL}/chat/completions", timeout=self.timeout, headers={
+                    "Authorization": f"Bearer {_secret('OPENROUTER_API_KEY')}",
+                    "X-Title": "Sentinela AML"}, json={
+                    "model": model, "temperature": 0.1,
+                    "response_format": {"type": "json_object"},
+                    "messages": [{"role": "system", "content": system + "\nResponde SOLO con un objeto JSON válido."},
+                                 {"role": "user", "content": user}]})
+                r.raise_for_status()
+                data = _parse_json(r.json()["choices"][0]["message"]["content"])
+                self.openrouter_model = model
+                return data
+            except Exception as exc:  # 429, timeout, JSON inválido -> siguiente modelo gratuito
+                last = exc
+        raise last or RuntimeError("sin modelos gratuitos configurados")
 
     def json_chat(self, agent: str, system: str, user: str, fallback: dict,
                   forbidden: list[str] | None = None) -> tuple[dict, dict]:
