@@ -1,10 +1,15 @@
 """Métrica de impacto (modo sombra): corre el pipeline sobre todas las alertas y compara con la etiqueta real.
 
-    python evaluate.py            # usa data/alerts.json; guarda data/metricas.json
+    python evaluate.py            # modo reglas (rápido y reproducible); guarda data/metricas.json
+    python evaluate.py --llm      # además hace razonar al LLM configurado (lento)
+
+El riesgo, la confianza y la zona se calculan de forma determinista: el LLM solo explica y redacta,
+por eso las métricas no cambian entre ambos modos.
 """
 from __future__ import annotations
 
 import json
+import sys
 import time
 from collections import Counter
 from datetime import datetime
@@ -15,6 +20,8 @@ from core.orchestrator import Orchestrator
 
 def main() -> None:
     o = Orchestrator()
+    if "--llm" not in sys.argv:
+        o.llm.provider_cfg = "ninguno"
     rows, t0 = [], time.perf_counter()
     for aid, a in o.alerts.items():
         t = time.perf_counter()

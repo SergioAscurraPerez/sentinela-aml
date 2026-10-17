@@ -60,9 +60,10 @@ fx_a_usd: 1.0                  # se sobrescribe por caso según la moneda de la 
 campos_privados: [nombre_cliente, documento_identidad, cuenta_real, direccion, telefono]
 
 llm:
-  proveedor: ollama            # ollama | ninguno
+  proveedor: auto              # auto (Ollama si corre, si no OpenRouter) | ollama | openrouter | ninguno
   url: http://localhost:11434
-  modelo: qwen2.5:7b
+  modelo: qwen2.5:3b           # Ollama local (CPU). Con GPU NVIDIA: qwen2.5:7b
+  modelo_openrouter: google/gemini-2.5-flash-lite   # ~15 s/caso; requiere OPENROUTER_API_KEY (entorno o .streamlit/secrets.toml)
   timeout_s: 60
   usar_cache: false            # demo 100% en vivo: cada razonamiento se genera en el momento
 

@@ -33,8 +33,8 @@ def orch() -> Orchestrator:
     return st.session_state.orch
 
 
-def _llm_badge(modo: str | None) -> str:
-    return {"llm": "🧠 razonó con LLM local", "cache": "🧠 LLM (caché)", "bloqueado": "🔒 bloqueado por privacidad"}.get(
+def _llm_badge(modo: str | None, proveedor: str | None = None) -> str:
+    return {"llm": "🧠 razonó con OpenRouter" if proveedor == "openrouter" else "🧠 razonó con LLM local", "cache": "🧠 LLM (caché)", "bloqueado": "🔒 bloqueado por privacidad"}.get(
         modo or "", "⚙️ reglas (LLM apagado)")
 
 
@@ -48,7 +48,7 @@ def agent_state_from_log(events: list[dict]) -> dict:
             stt.setdefault(a, {"badges": []}).update(st="done" if e["status"] == "ok" else "err",
                                                      n=e["detail"].get("hallazgos", 0), ms=e["latency_ms"])
         elif e["kind"] == "llm.llamada":
-            stt.setdefault(a, {"st": "run", "badges": []})["badges"].append(_llm_badge(e["detail"].get("modo")))
+            stt.setdefault(a, {"st": "run", "badges": []})["badges"].append(_llm_badge(e["detail"].get("modo"), e["detail"].get("proveedor")))
         elif e["kind"] == "registry.descubrimiento":
             stt.setdefault(e["detail"]["agente"], {"st": "wait", "badges": []})["badges"].append("🔎 descubierto en NANDA")
     return stt
@@ -67,8 +67,8 @@ with st.sidebar:
     aid = st.selectbox("Caso abierto", alert_ids, index=alert_ids.index(default) if default in alert_ids else 0,
                        format_func=lambda a: f"{a} · {o.alerts[a].get('titulo', o.alerts[a]['regla'])[:42]}")
     st.session_state.aid = aid
-    llm_ok = o.llm.available(refresh=st.button("↻ Revisar LLM local", use_container_width=True))
-    st.markdown(f"**LLM local:** {'🟢 ' + o.llm.model if llm_ok else '🟡 modo reglas (Ollama no detectado)'}  \n"
+    llm_ok = o.llm.available(refresh=st.button("↻ Revisar LLM", use_container_width=True))
+    st.markdown(f"**LLM:** {'🟢 ' + o.llm.label if llm_ok else '🟡 modo reglas (sin Ollama ni OpenRouter)'}  \n"
                 f"**Protocolos NANDA:** {'🟢 nandatown' if o.town.backend == 'nandatown' else '🟡 respaldo local'}")
     st.markdown("**Confianza en agentes** · capa *trust*")
     st.dataframe(pd.DataFrame([{"agente": ui.AGENT_NAME.get(n, n), "reputación": o.town.trust.score(n),
@@ -164,7 +164,7 @@ with tab_caso:
             elif k == "agente.inicio":
                 state[ev["actor"]] = {"st": "run", "badges": state.get(ev["actor"], {}).get("badges", [])}
             elif k == "llm.llamada":
-                state.setdefault(ev["actor"], {"st": "run", "badges": []})["badges"].append(_llm_badge(ev["detail"]["modo"]))
+                state.setdefault(ev["actor"], {"st": "run", "badges": []})["badges"].append(_llm_badge(ev["detail"]["modo"], ev["detail"].get("proveedor")))
             elif k == "agente.fin":
                 state.setdefault(ev["actor"], {"badges": []}).update(st="done" if ev["status"] == "ok" else "err",
                                                                      n=ev["detail"]["hallazgos"], ms=ev["latency_ms"])
@@ -200,8 +200,12 @@ with tab_caso:
             kk[2].markdown(ui.kpi(str(len(case.window)), "transacciones analizadas"), unsafe_allow_html=True)
             top = [f["claim"] for f in sorted(case.findings, key=lambda f: -f["severity"]) if f["kind"] == "riesgo"][:3]
             mit = [f["claim"] for f in case.findings if f["kind"] == "mitigante"]
-            st.markdown("**En resumen:** " + ("; ".join(top) if top else "sin señales de riesgo relevantes")
-                        + (f". **Pero:** {mit[0]}" if mit else "") + ".")
+            if case.shared.get("resumen_ejecutivo"):
+                st.markdown(f"**Resumen ejecutivo** <small>(🧠 {o.llm.label})</small>: {case.shared['resumen_ejecutivo']}",
+                            unsafe_allow_html=True)
+            else:
+                st.markdown("**En resumen:** " + ("; ".join(top) if top else "sin señales de riesgo relevantes")
+                            + (f". **Pero:** {mit[0]}" if mit else "") + ".")
             if alert.get("sorpresa"):
                 if st.toggle("👀 Revelar la tipología real del caso sorpresa", key=f"reveal_{aid}"):
                     st.success(f"Tipología generada: **{TIPOLOGIAS.get(alert['etiqueta_real'], 'Cliente normal / planilla')}**"
@@ -330,7 +334,7 @@ with tab_caso:
 # ---------------------------------------------------------------- privacidad
 with tab_priv:
     st.subheader("🔒 Lo que vio el modelo")
-    st.caption("Contenido EXACTO enviado al LLM local. Sin nombres, DNI, cuentas reales ni montos exactos.")
+    st.caption("Contenido EXACTO enviado al LLM (local u OpenRouter). Sin nombres, DNI, cuentas reales ni montos exactos.")
     evs = [e for e in o.log.list(aid) if e["kind"] in ("llm.llamada", "llm.error", "privacy.bloqueado")]
     if not evs:
         st.info("Aún no hay llamadas al LLM para este caso.")
