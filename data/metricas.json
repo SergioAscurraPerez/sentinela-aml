@@ -1,0 +1,18 @@
+{
+ "fecha": "2026-10-17T14:32",
+ "alertas": 75,
+ "lavado_no_cerrado": "59/62",
+ "lavado_escalado": "33/62",
+ "normales_a_cierre_sugerido": "5/13",
+ "zonas": {
+  "escalamiento": 35,
+  "cierre_sugerido": 8,
+  "revision_humana": 32
+ },
+ "seg_por_alerta": 0.87,
+ "lavado_que_iria_a_cierre": [
+  "S-017 Deposit-Send",
+  "S-018 Deposit-Send",
+  "S-047 Single_large"
+ ]
+}
