@@ -1,0 +1,48 @@
+# Política de autonomía de Sentinela AML.
+# La define el banco (regla de negocio). Cambiar un valor aquí cambia el comportamiento sin tocar código.
+
+autonomia:
+  # Por debajo de este riesgo el sistema SUGIERE descartar, pero igual lo confirma un humano.
+  sugerir_descartar_si_riesgo_menor_a: 0.25
+  # Por encima de este riesgo, descartar exige una segunda justificación.
+  doble_justificacion_si_riesgo_mayor_a: 0.70
+  # Acciones que ningún agente puede ejecutar: solo el rol humano "oficial_cumplimiento".
+  acciones_prohibidas_a_agentes: [cerrar_alerta, descartar, escalar_ros, enviar_ros, contactar_cliente]
+  # Roles humanos con permiso de decisión.
+  roles_con_decision: [oficial_cumplimiento]
+
+# Umbrales del Registro de Operaciones (Res. SBS 2660-2015, art. 49). Verificar vigencia.
+umbrales_registro:
+  operacion_unica_usd: 10000
+  multiples_mes_usd: 50000
+  multiples_minimo_individual_usd: 1000
+
+# Plazo para comunicar el ROS a la UIF-Perú desde que la operación se califica como sospechosa.
+plazo_ros_horas: 24
+# Conservación de expedientes (Ley 27693, art. 9.4).
+conservacion_anios: 10
+
+deteccion:
+  # Estructuración: depósitos justo por debajo del umbral (ej. entre 85% y 100% del umbral).
+  estructuracion_banda_inferior: 0.85
+  estructuracion_min_operaciones: 3
+  ventana_dias: 7
+  fan_min_contrapartes: 8
+  ciclo_max_longitud: 5
+  pass_through_ratio: 0.8
+
+# Moneda de los datos de entrada y tipo de cambio aproximado a USD (SAML-D viene en GBP).
+moneda_dataset: USD
+fx_a_usd: 1.0
+
+# Campos que NUNCA salen hacia el LLM ni a otros agentes (capa privacy de NANDA).
+campos_privados: [nombre_cliente, documento_identidad, cuenta_real, direccion, telefono]
+
+llm:
+  proveedor: ollama            # ollama | ninguno
+  url: http://localhost:11434
+  modelo: qwen2.5:7b
+  timeout_s: 60
+  usar_cache: true
+
+entrada_alertas: json          # adaptador: json | csv | api

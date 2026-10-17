@@ -1,0 +1,242 @@
+"""Orquestador de Sentinela AML.
+
+Flujo: alerta -> privacidad -> descubrimiento (registry NANDA) -> agentes -> firma + evidencia
+       -> verificación -> riesgo ponderado por confianza -> redactor -> GATE HUMANO.
+Solo un humano con rol autorizado puede decidir (descartar / vigilancia / escalar ROS).
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Callable
+
+from agents import ALL_AGENTS
+from agents.base import Case
+
+from . import analytics as A
+from .events import EventLog, Timer
+from .llm import LocalLLM
+from .nanda_layer import BankTown, canonical_json
+from .policy import load_policy
+from .pseudonymizer import Pseudonymizer
+
+DATA = Path(__file__).resolve().parent.parent / "data"
+HUMANO = "oficial_cumplimiento"
+
+# orden fijo de capacidades que el orquestador busca en el registro
+PIPELINE = ["analisis_transaccional", "screening_listas", "normativa", "contraargumento"]
+
+
+class Orchestrator:
+    def __init__(self, log: EventLog | None = None):
+        self.policy = load_policy()
+        self.log = log or EventLog()
+        self.town = BankTown(self.log)
+        self.town.privacy.configure(self.policy["campos_privados"])
+        self.llm = LocalLLM(self.policy, self.log)
+        self.agents = {cls.name: cls() for cls in ALL_AGENTS}
+        for ag in self.agents.values():  # orden fijo => llaves reproducibles para verificar expedientes
+            self.town.register_agent(ag.name, ag.capabilities, {"descripcion": ag.description,
+                                                                 "puede_decidir": False})
+        self.town.identity.create(HUMANO)
+        self.alerts = {a["alert_id"]: a for a in json.loads((DATA / "alerts.json").read_text(encoding="utf-8"))}
+        self.cases: dict[str, Case] = {}
+        self.decisions: dict[str, dict] = {}
+
+    # ------------------------------------------------------------------ investigación
+    def investigate(self, alert_id: str, on_step: Callable[[str, str, list[dict]], None] | None = None) -> Case:
+        alert = self.alerts[alert_id]
+        self.log.clear(alert_id)
+        self.log.current_alert = alert_id
+        self.decisions.pop(alert_id, None)
+        self.log.add("orquestador", "alerta.recibida", self.town.privacy.redact(alert))
+
+        forbidden = [str(alert.get(k, "")) for k in self.policy["campos_privados"]] + [alert["account"]]
+        w = A.account_window(alert["account"], alert["fecha"])
+        nb = A.neighborhood(alert["account"], alert["fecha"])
+        case = Case(alert=alert, policy=self.policy, llm=self.llm, pseudo=Pseudonymizer(), window=w,
+                    neighborhood=nb, forbidden=forbidden)
+        self.cases[alert_id] = case
+        self.log.add("orquestador", "privacidad.pseudonimizacion",
+                     {"campos_protegidos": self.policy["campos_privados"], "cuenta": case.token,
+                      "transacciones_en_ventana": len(w), "aristas_vecindario": len(nb)})
+
+        for cap in PIPELINE:
+            cards = self.town.registry.lookup(cap)
+            if not cards:
+                self.log.add("orquestador", "registry.sin_agente", {"capacidad": cap}, status="alerta")
+                continue
+            card = cards[0]
+            self.log.add("orquestador", "registry.descubrimiento",
+                         {"capacidad": cap, "agente": card["name"], "agent_id": card["agent_id"],
+                          "confianza": self.town.trust.score(card["name"])})
+            self._run_agent(case, card["name"], on_step)
+
+        self.score(case)
+        self._run_agent(case, "agente_redactor", on_step)
+        self.log.add("orquestador", "gate.humano",
+                     {"estado": "pendiente_revision_humana", "riesgo": case.shared["riesgo"],
+                      "sugerencia": self.suggestion(case)})
+        return case
+
+    def _run_agent(self, case: Case, name: str, on_step=None) -> None:
+        ag = self.agents[name]
+        self.log.add(name, "agente.inicio", {"capacidades": ag.capabilities})
+        with Timer() as t:
+            try:
+                found = ag.run(case)
+                status = "ok"
+            except Exception as exc:  # un agente que falla no tumba el caso
+                found, status = [], "error"
+                self.log.add(name, "agente.error", {"error": str(exc)[:300]}, status="error")
+        accepted = []
+        for f in found:
+            signed = self.town.sign_finding(name, f)
+            if self.submit_finding(case.alert_id, signed):
+                accepted.append(signed)
+        self.log.add(name, "agente.fin", {"hallazgos": len(accepted)}, status=status, latency_ms=t.ms)
+        if on_step:
+            on_step(name, status, accepted)
+
+    def submit_finding(self, alert_id: str, finding: dict) -> bool:
+        """Toda entrada al expediente pasa por aquí: verificación de firma + registro de evidencia."""
+        case = self.cases[alert_id]
+        if not self.town.verify_finding(finding):
+            self.log.add("orquestador", "hallazgo.rechazado",
+                         {"motivo": "firma inválida", "dice_ser": finding.get("agent"),
+                          "claim": finding.get("claim")}, status="alerta", alert_id=alert_id)
+            return False
+        finding = dict(finding)
+        finding["fact_id"] = self.town.facts.attest(finding["agent"], alert_id, finding["typology"],
+                                                    {"finding_id": finding["finding_id"],
+                                                     "fingerprint": finding.get("fingerprint")})
+        finding.setdefault("estado", "pendiente")
+        case.findings.append(finding)
+        self.log.add(finding["agent"], "hallazgo.firmado",
+                     {"finding_id": finding["finding_id"], "kind": finding["kind"], "claim": finding["claim"],
+                      "severidad": finding["severity"], "firma": finding["signature"][:16] + "…"},
+                     alert_id=alert_id)
+        return True
+
+    # ------------------------------------------------------------------ riesgo
+    def _w(self, agent: str) -> float:
+        return max(0.4, min(1.6, 1 + 0.15 * self.town.trust.score(agent)))
+
+    def score(self, case: Case) -> float:
+        live = [f for f in case.findings if f.get("estado") != "rechazado"]
+        risk_f = [f for f in live if f["kind"] == "riesgo"]
+        mit_f = [f for f in live if f["kind"] == "mitigante"]
+        combined = 1 - math.prod(1 - min(f["severity"] * self._w(f["agent"]), 0.99) for f in risk_f) if risk_f else 0.05
+        mitig = max((min(f["severity"] * self._w(f["agent"]), 0.9) for f in mit_f), default=0.0)
+        risk = round(combined * (1 - 0.6 * mitig), 2)
+        case.shared["riesgo"] = risk
+        self.log.add("orquestador", "riesgo.calculado",
+                     {"riesgo": risk, "hallazgos_riesgo": len(risk_f), "mitigacion": round(mitig, 2),
+                      "formula": "1-Π(1-sev·w_confianza) × (1-0.6·mitigación)"}, alert_id=case.alert_id)
+        return risk
+
+    def suggestion(self, case: Case) -> str:
+        r, a = case.shared.get("riesgo", 0), self.policy["autonomia"]
+        if r < a["sugerir_descartar_si_riesgo_menor_a"]:
+            return "sugerir_descartar"
+        if r >= 0.5:
+            return "sugerir_escalar_ros"
+        return "sugerir_vigilancia"
+
+    # ------------------------------------------------------------------ human-in-the-loop
+    def feedback(self, alert_id: str, finding_id: str, valido: bool, actor: str = HUMANO) -> int:
+        case = self.cases[alert_id]
+        f = next(x for x in case.findings if x["finding_id"] == finding_id)
+        f["estado"] = "validado" if valido else "rechazado"
+        receipt = self.town.facts.attest(actor, f["agent"], "feedback_humano",
+                                         {"finding_id": finding_id, "valido": valido})
+        score = self.town.trust.update(actor, f["agent"], "good" if valido else "bad", receipt)
+        self.log.add(actor, "humano.feedback", {"finding_id": finding_id, "agente": f["agent"],
+                                                "valido": valido, "nueva_confianza": score}, alert_id=alert_id)
+        self.score(case)
+        return score
+
+    def ask(self, alert_id: str, agent: str, question: str) -> dict:
+        case = self.cases[alert_id]
+        self.log.add(HUMANO, "humano.pregunta", {"agente": agent, "pregunta": question}, alert_id=alert_id)
+        f = self.town.sign_finding(agent, self.agents[agent].answer(case, question))
+        self.submit_finding(alert_id, f)
+        return f
+
+    def redraft(self, alert_id: str) -> None:
+        case = self.cases[alert_id]
+        case.findings = [f for f in case.findings if f["kind"] != "borrador"]
+        self._run_agent(case, "agente_redactor")
+
+    def decide(self, alert_id: str, actor: str, role: str, action: str, justification: str,
+               justification2: str | None = None) -> dict:
+        pol = self.policy["autonomia"]
+        case = self.cases[alert_id]
+        if actor != HUMANO or role not in pol["roles_con_decision"]:
+            self.log.add(actor, "permiso.denegado", {"accion": action, "rol": role,
+                                                     "regla": "acciones_prohibidas_a_agentes"},
+                         status="alerta", alert_id=alert_id)
+            raise PermissionError(f"{actor} no tiene permiso para '{action}'")
+        if not justification or len(justification.strip()) < 15:
+            raise ValueError("La justificación es obligatoria (mín. 15 caracteres): la norma exige dejar constancia.")
+        risk = case.shared.get("riesgo", 0)
+        if action == "descartar" and risk > pol["doble_justificacion_si_riesgo_mayor_a"] and not justification2:
+            raise ValueError("Riesgo alto: descartar exige una segunda justificación.")
+        now = datetime.now()
+        dec = {"alert_id": alert_id, "accion": action, "actor": actor, "rol": role, "riesgo": risk,
+               "justificacion": justification, "justificacion_2": justification2,
+               "sugerencia_sistema": self.suggestion(case), "ts": now.isoformat(timespec="seconds")}
+        if action == "escalar_ros":
+            dec["calificada_sospechosa_en"] = dec["ts"]
+            dec["vence_ros"] = (now + timedelta(hours=self.policy["plazo_ros_horas"])).isoformat(timespec="seconds")
+        dec["signature"] = self.town.auth.sign_as(actor, {k: v for k, v in dec.items() if k != "signature"})
+        dec["fact_id"] = self.town.facts.attest(actor, alert_id, "decision", {"accion": action})
+        self.decisions[alert_id] = dec
+        self.log.add(actor, "humano.decision", {k: v for k, v in dec.items() if k != "signature"},
+                     alert_id=alert_id)
+        return dec
+
+    def reidentify(self, alert_id: str, actor: str = HUMANO) -> dict:
+        a = self.alerts[alert_id]
+        self.log.add(actor, "privacidad.reidentificacion", {"motivo": "consulta del oficial"},
+                     status="alerta", alert_id=alert_id)
+        return {k: a.get(k) for k in self.policy["campos_privados"] + ["account"] if k in a}
+
+    # ------------------------------------------------------------------ expediente
+    def export(self, alert_id: str) -> dict:
+        case = self.cases[alert_id]
+        exp = {
+            "expediente": alert_id,
+            "generado": datetime.now().isoformat(timespec="seconds"),
+            "conservar_hasta": (datetime.now() + timedelta(days=365 * self.policy["conservacion_anios"])).date().isoformat(),
+            "nanda_backend": self.town.backend,
+            "alerta": self.town.privacy.redact(case.alert),
+            "cuenta_pseudonimo": case.token,
+            "riesgo": case.shared.get("riesgo"),
+            "hallazgos": case.findings,
+            "decision": self.decisions.get(alert_id),
+            "bitacora": self.log.list(alert_id),
+        }
+        exp["sha256"] = hashlib.sha256(canonical_json({k: v for k, v in exp.items() if k != "sha256"}).encode()).hexdigest()
+        (DATA / "expedientes").mkdir(exist_ok=True)
+        (DATA / "expedientes" / f"{alert_id}.json").write_text(json.dumps(exp, ensure_ascii=False, indent=1, default=str),
+                                                               encoding="utf-8")
+        return exp
+
+    def verify(self, exp: dict) -> dict[str, Any]:
+        body = {k: v for k, v in exp.items() if k != "sha256"}
+        hash_ok = hashlib.sha256(canonical_json(body).encode()).hexdigest() == exp.get("sha256")
+        res = []
+        for f in exp["hallazgos"]:
+            clean = {k: v for k, v in f.items() if k not in ("estado",)}
+            res.append({"finding_id": f["finding_id"], "agente": f["agent"], "firma_ok": self.town.verify_finding(clean)})
+        dec = exp.get("decision")
+        dec_ok = None
+        if dec:
+            dec_ok = self.town.auth.verify(dec["actor"], {k: v for k, v in dec.items()
+                                                          if k not in ("signature", "fact_id")}, dec["signature"])
+        return {"hash_integro": hash_ok, "hallazgos": res, "firmas_ok": all(r["firma_ok"] for r in res),
+                "decision_firmada_ok": dec_ok}

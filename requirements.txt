@@ -1,0 +1,9 @@
+streamlit>=1.40
+pandas>=2.1
+networkx>=3.2
+pyvis==0.3.2
+pyyaml>=6.0
+requests>=2.31
+kagglehub>=0.3
+# Protocolos de Project NANDA (si ya clonaste el repo al lado: pip install -e ../nandatown)
+nandatown @ git+https://github.com/projnanda/nandatown

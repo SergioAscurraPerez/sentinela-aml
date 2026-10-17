@@ -1,0 +1,61 @@
+{
+  "_nota": "Corpus curado para el agente normativo. Verificar vigencia y redacción exacta en las fuentes oficiales antes de usar fuera del hackathon.",
+  "normas": [
+    {
+      "id": "SBS-2660-2015-art49",
+      "norma": "Res. SBS N° 2660-2015, art. 49",
+      "tema": "registro_operaciones",
+      "texto": "Registro de operaciones únicas iguales o superiores a US$ 10,000; operaciones múltiples que individualmente superen US$ 1,000 y en conjunto sumen US$ 50,000 o más en un mes calendario.",
+      "tipologias": ["structuring", "fan_in", "fan_out"],
+      "fuente": "https://img.lpderecho.pe/wp-content/uploads/2017/10/LEGIS.PE-Reglamento-de-gestión-de-riesgos-de-lavado-de-activos-y-financiamiento-del-terrorismo.pdf"
+    },
+    {
+      "id": "LEY-27693-art11-def",
+      "norma": "Ley N° 27693, art. 11",
+      "tema": "definiciones",
+      "texto": "Operación inusual: cuantía, características y periodicidad no guardan relación con la actividad económica del cliente. Operación sospechosa: no tiene un fundamento económico o lícito aparente.",
+      "tipologias": ["structuring", "cycle", "pass_through", "fan_in", "fan_out"],
+      "fuente": "https://contralaft.gob.pe/"
+    },
+    {
+      "id": "ROS-24H",
+      "norma": "Reglamento SBS de gestión de riesgos LA/FT (ROS vía ROSEL)",
+      "tema": "plazo_ros",
+      "texto": "La comunicación del ROS a la UIF-Perú en ningún caso debe exceder las veinticuatro (24) horas desde que la operación es calificada como sospechosa. Se remite por ROSEL con la información mínima de la plantilla.",
+      "tipologias": ["*"],
+      "fuente": "https://www.howdengroup.com/sites/peru.howdenprod.com/files/2024-10/manual-gremial-para-la-prevencion-del-laft.pdf"
+    },
+    {
+      "id": "SUSTENTO-NO-REPORTE",
+      "norma": "Reglamento SBS de gestión de riesgos LA/FT",
+      "tema": "sustento",
+      "texto": "El Oficial de Cumplimiento debe dejar constancia del análisis y del motivo por el cual una operación inusual no fue calificada como sospechosa ni reportada.",
+      "tipologias": ["*"],
+      "fuente": "https://www.howdengroup.com/sites/peru.howdenprod.com/files/2024-10/manual-gremial-para-la-prevencion-del-laft.pdf"
+    },
+    {
+      "id": "LEY-27693-art9.4",
+      "norma": "Ley N° 27693, art. 9.4",
+      "tema": "conservacion",
+      "texto": "Los registros se conservan durante diez (10) años.",
+      "tipologias": ["*"],
+      "fuente": "https://contralaft.gob.pe/"
+    },
+    {
+      "id": "RESERVA",
+      "norma": "Ley N° 27693 (arts. 3-A, 10-A) y Reglamento SBS",
+      "tema": "reserva",
+      "texto": "Deber de reserva: no se informa a terceros (incluido el cliente) que se comunicó información a la UIF-Perú. Solo el Oficial de Cumplimiento conoce el envío de un ROS; su identidad se protege con códigos asignados por la UIF.",
+      "tipologias": ["*"],
+      "fuente": "https://contralaft.gob.pe/"
+    },
+    {
+      "id": "SENAL-FRACCIONADAS",
+      "norma": "Señales de alerta (Anexo del Reglamento SBS LA/FT)",
+      "tema": "senal_alerta",
+      "texto": "El cliente realiza de forma reiterada operaciones fraccionadas.",
+      "tipologias": ["structuring"],
+      "fuente": "https://www.howdengroup.com/sites/peru.howdenprod.com/files/2024-10/manual-gremial-para-la-prevencion-del-laft.pdf"
+    }
+  ]
+}

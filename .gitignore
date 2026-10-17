@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+data/raw/
+data/sentinela.db
+data/.town_seed
+data/expedientes/
+data/cache/
+.streamlit/secrets.toml
