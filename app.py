@@ -16,6 +16,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from agents.impostor import attack
+from agents.redactor import TIPO_PAGO
 from core.live import OCUPACIONES, TIPOLOGIAS, default_params
 from core.orchestrator import ANALISTA, HUMANO, ROLES, ZONAS, Orchestrator
 from ui import components as ui
@@ -185,6 +186,47 @@ def graph_block(aid: str, case) -> None:
     components.html(ui.graph_html(case, full=full), height=520)
 
 
+def transactions_block(aid: str, case, expanded: bool) -> None:
+    """Registro de transacciones de la cuenta con montos exactos (vista interna del analista; no va al LLM)."""
+    w, acc = case.window, case.account
+    cur = o.alerts[aid].get("moneda", "USD")
+    evid = {e for f in case.findings if f["kind"] == "riesgo" for e in f["evidence"]}
+    entra = w.receiver == acc
+    tot_in, tot_out = float(w[entra].amount.sum()), float(w[~entra].amount.sum())
+    with st.expander(f"📒 Registro de transacciones ({len(w)}) · entradas {tot_in:,.0f} · salidas {tot_out:,.0f} {cur}",
+                     expanded=expanded):
+        if not len(w):
+            st.info("La cuenta no tiene movimientos en la ventana analizada.")
+            return
+        c1, c2 = st.columns([1, 1])
+        sentido = c1.radio("Mostrar", ["Todas", "Entradas", "Salidas"], horizontal=True, key=f"tx_dir_{aid}",
+                           label_visibility="collapsed")
+        solo_ev = c2.toggle("Solo las que son evidencia de una señal", key=f"tx_ev_{aid}", disabled=not evid)
+        df = pd.DataFrame({
+            "fecha": w.timestamp.dt.strftime("%Y-%m-%d %H:%M"),
+            "sentido": ["⬇ entrada" if x else "⬆ salida" for x in entra],
+            "tipo": [TIPO_PAGO.get(t, t) for t in w.payment_type.astype(str)],
+            "contraparte": [case.pseudo.token(s if x else r) for s, r, x in zip(w.sender, w.receiver, entra)],
+            f"monto ({cur})": w.amount.round(2),
+            "país contraparte": [s if x else r for s, r, x in zip(w.sender_loc, w.receiver_loc, entra)],
+            "evidencia": ["🔴" if t in evid else "" for t in w.tx_id],
+            "tx_id": w.tx_id,
+        })
+        if sentido != "Todas":
+            df = df[df.sentido.str.contains(sentido[:-1].lower())]
+        if solo_ev:
+            df = df[df.evidencia != ""]
+        st.dataframe(df.sort_values("fecha", ascending=False), hide_index=True, width="stretch",
+                     height=min(420, 38 + 35 * len(df)),
+                     column_config={f"monto ({cur})": st.column_config.NumberColumn(format="localized")})
+        k = st.columns(4)
+        k[0].markdown(ui.kpi(f"{tot_in:,.0f}", f"entradas ({cur})"), unsafe_allow_html=True)
+        k[1].markdown(ui.kpi(f"{tot_out:,.0f}", f"salidas ({cur})"), unsafe_allow_html=True)
+        k[2].markdown(ui.kpi(f"{tot_in - tot_out:,.0f}", f"neto ({cur})"), unsafe_allow_html=True)
+        k[3].markdown(ui.kpi(str(len(set(w.sender) | set(w.receiver)) - 1), "contrapartes distintas"), unsafe_allow_html=True)
+        st.caption("Montos exactos: vista interna del analista. Al modelo de lenguaje solo le llegan rangos y CTA_###.")
+
+
 def documents_block(aid: str) -> None:
     with st.container(border=True):
         st.markdown("#### 📄 Documento de origen de fondos")
@@ -327,6 +369,7 @@ def render_client(aid: str) -> None:
         st.rerun()
     case = o.cases[aid]
     graph_block(aid, case)
+    transactions_block(aid, case, expanded=case.shared.get("zona") == "cierre_sugerido" or len(case.window) <= 15)
     with st.expander("🤖 Equipo de agentes que analizó al cliente", expanded=False):
         st.markdown(ui.agent_grid(agent_state_from_log(o.log.list(aid))), unsafe_allow_html=True)
     steps_block(aid)
