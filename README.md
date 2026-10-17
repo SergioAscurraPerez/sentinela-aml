@@ -14,9 +14,10 @@ Hack AI Agents Impact · NTT DATA × Sundai LATAM × Project NANDA (MIT Media La
 ## Solución
 | | |
 |---|---|
-| 🤖 **5 agentes especialistas** | Transaccional (grafo + tipologías), Listas (PEP / sanciones), Normativo (citas exactas SBS/UIF), **Abogado del diablo** (busca explicaciones legítimas → menos falsos positivos), Redactor (borrador de ROS o sustento de no reporte) |
+| 🤖 **6 agentes especialistas** | Transaccional (grafo + 8 tipologías: estructuración, pitufeo, ciclos, pass-through, concentración-dispersión, fan-in/out, cambio de comportamiento), **Perfil KYC** (perfil vs monto, cliente nuevo), Listas (PEP / sanciones), Normativo (citas exactas SBS/UIF), **Abogado del diablo** (busca explicaciones legítimas → menos falsos positivos), Redactor (borrador de ROS o sustento de no reporte) |
+| 🧭 **Triaje por confianza** | Cada caso tiene **riesgo** (qué tan sospechoso) y **confianza** (qué tan seguro está el sistema). Tres colas: 🟢 cierre sugerido · 🟡 revisión humana · 🔴 escalamiento. Entra un humano aunque el riesgo sea bajo si los agentes no coinciden, cliente nuevo, sin KYC, poco historial o monto muy alto, más un 10% de muestreo de control de calidad |
 | 🔏 **Protocolos NANDA** | `identity` + `registry` (el orquestador descubre agentes por capacidad), `auth` (cada hallazgo firmado), `data_facts` (evidencia atribuida), `trust` (reputación según el feedback humano), `privacy` (campos que nunca salen) |
-| 🧑‍⚖️ **Human-in-the-loop** | Validar/rechazar cada hallazgo (cambia la confianza en el agente y el riesgo), pedir más información a un agente, decisión final firmada **solo por el Oficial de Cumplimiento**, justificación obligatoria, doble justificación si descarta riesgo alto, reloj de 24 h al calificar |
+| 🧑‍⚖️ **Human-in-the-loop** | Roles **Analista** (valida y pregunta) y **Oficial de Cumplimiento** (firma y aprueba en lote los cierres sugeridos). Validar/rechazar cada hallazgo (cambia la confianza en el agente y el riesgo), pedir más información a un agente, decisión final firmada **solo por el Oficial de Cumplimiento**, justificación obligatoria, doble justificación si descarta riesgo alto, reloj de 24 h al calificar |
 | 🔒 **Privacidad** | LLM **local** (Ollama) + pseudonimización (CTA_###, montos en rangos) + guardia que bloquea cualquier prompt con datos sensibles. Panel "Lo que vio el modelo" |
 | 🛰️ **Seguimiento** | Sala de control en vivo, bitácora SQLite de cada paso (actor, herramienta, latencia), expediente exportable con hash y botón **Verificar** |
 | 😈 **Agente impostor** | Intenta colar un "descartar" suplantando a otro agente → firma inválida → rechazado y registrado |
@@ -47,7 +48,7 @@ pip install -r requirements.txt  # o, con el repo clonado al lado: pip install -
 
 # 2) datos: ya incluye 3 alertas sintéticas de demo. Para sumar datos reales de Kaggle:
 python data/download_data.py
-python data/prepare_data.py --source samld --nrows 2000000
+python data/prepare_data.py --source samld      # lee SAML-D completo en bloques (2-4 min)
 
 # 3) LLM local (opcional; sin él funciona en "modo reglas")
 ollama pull qwen2.5:7b
@@ -55,11 +56,12 @@ ollama pull qwen2.5:7b
 # 4) app
 streamlit run app.py
 
-# métrica de impacto
+# métrica de impacto (modo sombra) -> data/metricas.json
 python evaluate.py
 ```
 
 ## Guion de demo (3 min)
+0. **Bandeja** → *Investigar todas*: las alertas se reparten en 3 colas (riesgo + confianza).
 1. **A-001** → *Investigar*: ver a los agentes descubrirse en el registro NANDA y firmar hallazgos (estructuración + pass-through internacional).
 2. Expediente: el **abogado del diablo** no encuentra mitigantes. Rechazar un hallazgo → baja la confianza en ese agente y se recalcula el riesgo.
 3. **Privacidad**: "Lo que vio el modelo" → ni un dato personal.

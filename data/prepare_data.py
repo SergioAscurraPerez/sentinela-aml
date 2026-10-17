@@ -8,7 +8,7 @@ Con --source samld o --source ibm añade alertas reales del dataset (etiquetadas
 
 Uso:
     python data/prepare_data.py                       # solo sintético (funciona sin Kaggle)
-    python data/prepare_data.py --source samld --nrows 2000000
+    python data/prepare_data.py --source samld            # lee SAML-D completo en bloques (~2-4 min)
     python data/prepare_data.py --source ibm
 """
 from __future__ import annotations
@@ -93,24 +93,58 @@ def synthetic(seed: int = 7) -> tuple[pd.DataFrame, list[dict]]:
 
     df = pd.DataFrame(rows, columns=COLS).sort_values("timestamp").reset_index(drop=True)
     alerts = [
-        dict(alert_id="A-001", account=tgt, regla="Depósitos en efectivo recurrentes cercanos al umbral de registro",
+        dict(alert_id="A-001", account=tgt, moneda="USD",
+             titulo="Bodega en Gamarra: depósitos en efectivo fraccionados y envío al exterior",
+             regla="Depósitos en efectivo recurrentes cercanos al umbral de registro",
              fecha=(t0 + timedelta(days=15)).date().isoformat(), etiqueta_real="Structuring", origen="sintetico",
              cuenta_real="191-2345678-0-11", **_fake_pii(rng)),
-        dict(alert_id="A-002", account=cyc[0], regla="Movimiento circular de fondos de alto monto en <48 h",
+        dict(alert_id="A-002", account=cyc[0], moneda="USD",
+             titulo="Red de cuentas mula: el dinero da la vuelta en 26 horas",
+             regla="Movimiento circular de fondos de alto monto en <48 h",
              fecha=(t0 + timedelta(days=19)).date().isoformat(), etiqueta_real="Cycle", origen="sintetico",
              cuenta_real="191-8765432-0-22", **_fake_pii(rng)),
-        dict(alert_id="A-003", account=emp, regla="Fan-out: pagos a más de 25 cuentas distintas en un día",
+        dict(alert_id="A-003", account=emp, moneda="USD",
+             titulo="Empresa textil: pagos a 30 cuentas el mismo día",
+             regla="Fan-out: pagos a más de 25 cuentas distintas en un día",
              fecha=(t0 + timedelta(days=30)).date().isoformat(), etiqueta_real="Normal", origen="sintetico",
              cuenta_real="191-1112223-0-33", **_fake_pii(rng)),
     ]
     return df, alerts
 
 
-def from_samld(nrows: int, per_type: int, seed: int = 7) -> tuple[pd.DataFrame, list[dict]]:
-    files = list((RAW / "saml_d").glob("*.csv"))
+def from_samld(nrows: int, per_type: int, seed: int = 7, min_laund_tx: int = 4,
+               n_normales: int | None = None) -> tuple[pd.DataFrame, list[dict]]:
+    """Lee SAML-D completo en bloques (no carga 1 GB en memoria) en dos pasadas.
+
+    Pasada 1: filas de lavado + conteo de transacciones por cuenta.
+    Pasada 2: TODAS las transacciones de las cuentas elegidas (historial completo).
+    La fecha de cada alerta = última transacción de lavado de la cuenta (no la última transacción cualquiera).
+    """
+    files = [f for f in (RAW / "saml_d").glob("*.csv") if "subset" not in f.name] or list((RAW / "saml_d").glob("*.csv"))
     if not files:
         raise SystemExit("No encontré SAML-D en data/raw/saml_d. Corre data/download_data.py")
-    df = pd.read_csv(files[0], nrows=nrows)
+    src = files[0]
+    rng = random.Random(seed)
+    chunks = dict(chunksize=1_000_000, nrows=nrows if nrows and nrows > 0 else None)
+    laund, counts = [], {}
+    for ch in pd.read_csv(src, **chunks):
+        laund.append(ch[ch.Is_laundering == 1])
+        for a, c in ch.Sender_account.value_counts().items():
+            counts[a] = counts.get(a, 0) + c
+    L = pd.concat(laund)
+    bad = set(L.Sender_account) | set(L.Receiver_account)
+    picks: list[tuple[int, str]] = []
+    for ltype, g in L.groupby("Laundering_type"):
+        acc = pd.concat([g.Sender_account, g.Receiver_account]).value_counts()
+        acc = acc[acc >= min_laund_tx].head(per_type)
+        picks += [(a, ltype) for a in acc.index]
+    normals = sorted(a for a, c in counts.items() if c >= 15 and a not in bad)
+    rng.shuffle(normals)
+    picks += [(a, "Normal") for a in normals[: n_normales or max(per_type * 3, 6)]]
+    sel = {a for a, _ in picks}
+
+    parts = [ch[ch.Sender_account.isin(sel) | ch.Receiver_account.isin(sel)] for ch in pd.read_csv(src, **chunks)]
+    df = pd.concat(parts).drop_duplicates()
     df["timestamp"] = pd.to_datetime(df["Date"].astype(str) + " " + df["Time"].astype(str))
     out = pd.DataFrame({
         "tx_id": "S" + df.index.astype(str),
@@ -125,14 +159,31 @@ def from_samld(nrows: int, per_type: int, seed: int = 7) -> tuple[pd.DataFrame, 
         "is_laundering": df["Is_laundering"].astype(int),
         "laundering_type": df["Laundering_type"],
     })
-    return _sample_alerts(out, per_type, "samld", seed)
+    alerts = []
+    for i, (acc, ltype) in enumerate(picks, start=1):
+        a = "ACC-" + str(acc)
+        mine = out[(out.sender == a) | (out.receiver == a)]
+        if ltype != "Normal":
+            fecha = mine[mine.is_laundering == 1].timestamp.max()
+        else:
+            ts = sorted(mine.timestamp)
+            fecha = ts[len(ts) // 2] if ts else None
+        if not fecha:
+            continue
+        alerts.append(dict(alert_id=f"S-{i:03d}", account=a, titulo=f"SAML-D · alerta de monitoreo {i:03d}",
+                           regla="Regla de monitoreo transaccional (SAML-D)", fecha=str(fecha)[:10],
+                           etiqueta_real=ltype, origen="samld", moneda="GBP",
+                           cuenta_real=f"191-{rng.randint(1_000_000, 9_999_999)}-0-{rng.randint(10, 99)}",
+                           **_fake_pii(rng)))
+    print(f"SAML-D: {len(L):,} filas de lavado, {len(alerts)} alertas, {len(out):,} transacciones del historial")
+    return out.reset_index(drop=True), alerts
 
 
 def from_ibm(nrows: int, per_type: int, seed: int = 7) -> tuple[pd.DataFrame, list[dict]]:
     f = RAW / "ibm" / "HI-Small_Trans.csv"
     if not f.exists():
         raise SystemExit("No encontré data/raw/ibm/HI-Small_Trans.csv")
-    df = pd.read_csv(f, nrows=nrows)
+    df = pd.read_csv(f, nrows=nrows or None)
     acc_cols = [c for c in df.columns if c.startswith("Account")]
     out = pd.DataFrame({
         "tx_id": "I" + df.index.astype(str),
@@ -147,7 +198,10 @@ def from_ibm(nrows: int, per_type: int, seed: int = 7) -> tuple[pd.DataFrame, li
         "is_laundering": df["Is Laundering"].astype(int),
         "laundering_type": df["Is Laundering"].map({1: "Laundering", 0: "Normal"}),
     })
-    return _sample_alerts(out, per_type, "ibm", seed)
+    out_df, al = _sample_alerts(out, per_type, "ibm", seed)
+    for a in al:
+        a["moneda"] = "USD"
+    return out_df, al
 
 
 def _sample_alerts(df: pd.DataFrame, per_type: int, origen: str, seed: int):
@@ -174,11 +228,42 @@ def _sample_alerts(df: pd.DataFrame, per_type: int, origen: str, seed: int):
     return sub.reset_index(drop=True), out_alerts
 
 
+KYC_DEMO = {
+    "A-001": ("persona_natural", "Comerciante minorista (bodega)", 1_200, 38),
+    "A-002": ("persona_natural", "Estudiante universitario", 300, 3),
+    "A-003": ("empresa", "Empresa textil (fabricación de prendas)", 110_000, 72),
+}
+OCUPACIONES = [("persona_natural", "Empleado dependiente", (800, 4_000)),
+               ("persona_natural", "Profesional independiente", (1_500, 8_000)),
+               ("persona_natural", "Comerciante", (1_000, 10_000)),
+               ("persona_natural", "Estudiante", (0, 600)),
+               ("empresa", "Pequeña empresa", (10_000, 80_000))]
+
+
+def kyc(alerts: list[dict], seed: int = 11) -> pd.DataFrame:
+    """Perfil KYC sintético por cuenta alertada (ingreso mensual declarado en USD).
+
+    Para las alertas de SAML-D/IBM el perfil se sortea SIN mirar la etiqueta real,
+    para no inflar la métrica.
+    """
+    rng = random.Random(seed)
+    rows = []
+    for a in alerts:
+        if a["alert_id"] in KYC_DEMO:
+            seg, ocu, ing, ant = KYC_DEMO[a["alert_id"]]
+        else:
+            seg, ocu, (lo, hi) = rng.choice(OCUPACIONES)
+            ing, ant = rng.randint(lo, hi), rng.randint(1, 120)
+        rows.append({"cuenta": a["account"], "segmento": seg, "ocupacion": ocu,
+                     "ingreso_mensual_usd": ing, "antiguedad_meses": ant})
+    return pd.DataFrame(rows)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", choices=["sintetico", "samld", "ibm"], default="sintetico")
-    ap.add_argument("--nrows", type=int, default=2_000_000)
-    ap.add_argument("--per-type", type=int, default=2)
+    ap.add_argument("--nrows", type=int, default=0, help="0 = archivo completo (recomendado)")
+    ap.add_argument("--per-type", type=int, default=4)
     args = ap.parse_args()
 
     df, alerts = synthetic()
@@ -190,6 +275,7 @@ def main() -> None:
         df, alerts = pd.concat([df, d2], ignore_index=True), alerts + a2
 
     df.to_csv(DATA / "transactions.csv", index=False)
+    kyc(alerts).to_csv(DATA / "clientes.csv", index=False)
     (DATA / "alerts.json").write_text(json.dumps(alerts, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"{len(df):,} transacciones, {len(alerts)} alertas -> data/transactions.csv, data/alerts.json")
 

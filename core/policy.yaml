@@ -8,8 +8,26 @@ autonomia:
   doble_justificacion_si_riesgo_mayor_a: 0.70
   # Acciones que ningún agente puede ejecutar: solo el rol humano "oficial_cumplimiento".
   acciones_prohibidas_a_agentes: [cerrar_alerta, descartar, escalar_ros, enviar_ros, contactar_cliente]
-  # Roles humanos con permiso de decisión.
+  # Roles humanos con permiso de decisión. El analista valida hallazgos y pregunta; el oficial firma.
   roles_con_decision: [oficial_cumplimiento]
+  roles_con_reidentificacion: [oficial_cumplimiento]
+
+# Triaje por confianza (diapositivas 5-6). Ninguna zona cierra sola: "cierre sugerido" lo aprueba un humano.
+triaje:
+  cierre_sugerido: {riesgo_max: 0.25, confianza_min: 0.75}
+  escalamiento: {riesgo_min: 0.70}
+  muestreo_qa_cierres: 0.10      # % de cierres sugeridos que igual van a revisión humana (control de calidad)
+
+# "Entra un humano aunque el porcentaje sea alto si..." (diapositiva 6)
+forzar_humano_si:
+  desacuerdo_agentes: true       # abogado del diablo con mitigación >= 0.4 vs hallazgo de riesgo >= 0.6
+  cliente_nuevo_meses: 6
+  monto_mayor_a_usd: 100000      # pico de ingresos en 30 días
+  pocas_transacciones: 5         # menos de N transacciones en la ventana
+  sin_perfil_kyc: true
+
+perfil:
+  estudiante_max_mensual_usd: 13500   # ~ S/ 50,000 (ejemplo de la diapositiva 4)
 
 # Umbrales del Registro de Operaciones (Res. SBS 2660-2015, art. 49). Verificar vigencia.
 umbrales_registro:
@@ -27,13 +45,16 @@ deteccion:
   estructuracion_banda_inferior: 0.85
   estructuracion_min_operaciones: 3
   ventana_dias: 7
-  fan_min_contrapartes: 8
+  fan_min_contrapartes: 6
   ciclo_max_longitud: 5
   pass_through_ratio: 0.8
+  pitufeo_min_operaciones: 8
+  concentracion_min_contrapartes: 4
+  cambio_z: 3.0
 
-# Moneda de los datos de entrada y tipo de cambio aproximado a USD (SAML-D viene en GBP).
-moneda_dataset: USD
-fx_a_usd: 1.0
+# Tipo de cambio aproximado a USD por moneda de la alerta (SAML-D viene en GBP). Verificar antes de la demo.
+fx_a_usd_por_moneda: {USD: 1.0, GBP: 1.27, EUR: 1.08, PEN: 0.27}
+fx_a_usd: 1.0                  # se sobrescribe por caso según la moneda de la alerta
 
 # Campos que NUNCA salen hacia el LLM ni a otros agentes (capa privacy de NANDA).
 campos_privados: [nombre_cliente, documento_identidad, cuenta_real, direccion, telefono]

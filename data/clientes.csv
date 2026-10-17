@@ -1,0 +1,4 @@
+cuenta,segmento,ocupacion,ingreso_mensual_usd,antiguedad_meses
+ACC-STR-001,persona_natural,Comerciante minorista (bodega),1200,38
+ACC-CYC-001,persona_natural,Estudiante universitario,300,3
+ACC-PAY-500,empresa,Empresa textil (fabricación de prendas),110000,72

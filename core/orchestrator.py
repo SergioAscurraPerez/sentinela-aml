@@ -6,6 +6,7 @@ Solo un humano con rol autorizado puede decidir (descartar / vigilancia / escala
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
@@ -25,9 +26,13 @@ from .pseudonymizer import Pseudonymizer
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 HUMANO = "oficial_cumplimiento"
+ANALISTA = "analista_aml"
+ROLES = {HUMANO: "Oficial de Cumplimiento", ANALISTA: "Analista AML"}
+ZONAS = {"cierre_sugerido": "🟢 Cierre sugerido", "revision_humana": "🟡 Revisión humana",
+         "escalamiento": "🔴 Escalamiento"}
 
 # orden fijo de capacidades que el orquestador busca en el registro
-PIPELINE = ["analisis_transaccional", "screening_listas", "normativa", "contraargumento"]
+PIPELINE = ["analisis_transaccional", "perfil_cliente", "screening_listas", "normativa", "contraargumento"]
 
 
 class Orchestrator:
@@ -42,6 +47,7 @@ class Orchestrator:
             self.town.register_agent(ag.name, ag.capabilities, {"descripcion": ag.description,
                                                                  "puede_decidir": False})
         self.town.identity.create(HUMANO)
+        self.town.identity.create(ANALISTA)
         self.alerts = {a["alert_id"]: a for a in json.loads((DATA / "alerts.json").read_text(encoding="utf-8"))}
         self.cases: dict[str, Case] = {}
         self.decisions: dict[str, dict] = {}
@@ -57,7 +63,9 @@ class Orchestrator:
         forbidden = [str(alert.get(k, "")) for k in self.policy["campos_privados"]] + [alert["account"]]
         w = A.account_window(alert["account"], alert["fecha"])
         nb = A.neighborhood(alert["account"], alert["fecha"])
-        case = Case(alert=alert, policy=self.policy, llm=self.llm, pseudo=Pseudonymizer(), window=w,
+        pol = copy.deepcopy(self.policy)
+        pol["fx_a_usd"] = pol.get("fx_a_usd_por_moneda", {}).get(alert.get("moneda", "USD"), 1.0)
+        case = Case(alert=alert, policy=pol, llm=self.llm, pseudo=Pseudonymizer(), window=w,
                     neighborhood=nb, forbidden=forbidden)
         self.cases[alert_id] = case
         self.log.add("orquestador", "privacidad.pseudonimizacion",
@@ -126,23 +134,78 @@ class Orchestrator:
         return max(0.4, min(1.6, 1 + 0.15 * self.town.trust.score(agent)))
 
     def score(self, case: Case) -> float:
+        """Riesgo (qué tan sospechoso) y confianza (qué tan seguro está el sistema) -> zona de triaje."""
+        pol = self.policy
         live = [f for f in case.findings if f.get("estado") != "rechazado"]
         risk_f = [f for f in live if f["kind"] == "riesgo"]
         mit_f = [f for f in live if f["kind"] == "mitigante"]
         combined = 1 - math.prod(1 - min(f["severity"] * self._w(f["agent"]), 0.99) for f in risk_f) if risk_f else 0.05
         mitig = max((min(f["severity"] * self._w(f["agent"]), 0.9) for f in mit_f), default=0.0)
         risk = round(combined * (1 - 0.6 * mitig), 2)
-        case.shared["riesgo"] = risk
-        self.log.add("orquestador", "riesgo.calculado",
-                     {"riesgo": risk, "hallazgos_riesgo": len(risk_f), "mitigacion": round(mitig, 2),
-                      "formula": "1-Π(1-sev·w_confianza) × (1-0.6·mitigación)"}, alert_id=case.alert_id)
+
+        # ---- confianza
+        fh = pol.get("forzar_humano_si", {})
+        conf, motivos, forzar = 0.92, [], []
+        max_sev = max((f["severity"] for f in risk_f), default=0.0)
+        if fh.get("desacuerdo_agentes") and max_sev >= 0.6 and mitig >= 0.4:
+            conf -= 0.35
+            forzar.append("Los agentes no están de acuerdo (riesgo alto vs. explicación legítima fuerte)")
+        if len(risk_f) == 1 and 0.35 <= max_sev < 0.7:
+            conf -= 0.12
+            motivos.append("Una sola señal de riesgo, de intensidad media")
+        n_tx = len(case.window)
+        if n_tx < fh.get("pocas_transacciones", 5):
+            conf -= 0.2
+            forzar.append(f"Poco historial: {n_tx} transacciones en la ventana")
+        perfil = case.shared.get("perfil", {})
+        if not perfil.get("disponible", False):
+            conf -= 0.1
+            if fh.get("sin_perfil_kyc"):
+                forzar.append("Sin perfil KYC del cliente")
+        if case.raw.get("cliente_nuevo"):
+            conf -= 0.15
+            forzar.append(f"Cliente nuevo (< {fh.get('cliente_nuevo_meses', 6)} meses)")
+        pico_usd = A.peak_30d_inflow(case.window, case.account) * case.policy.get("fx_a_usd", 1.0)
+        if pico_usd > fh.get("monto_mayor_a_usd", 1e18):
+            forzar.append(f"Monto muy alto: {pico_usd:,.0f} USD en 30 días")
+        used = {f["agent"] for f in risk_f + mit_f}
+        if used:
+            wmean = sum(self._w(a) for a in used) / len(used)
+            if wmean < 1:
+                conf *= wmean
+                motivos.append("Agentes con confianza reducida por feedback humano")
+        conf = round(max(0.05, min(conf, 0.99)), 2)
+
+        # ---- triaje
+        tz = pol.get("triaje", {})
+        cs, esc = tz.get("cierre_sugerido", {}), tz.get("escalamiento", {})
+        if risk >= esc.get("riesgo_min", 0.7):
+            zona = "escalamiento"
+            motivos.insert(0, f"Riesgo {risk:.2f} ≥ {esc.get('riesgo_min', 0.7)}")
+        elif risk <= cs.get("riesgo_max", 0.25) and conf >= cs.get("confianza_min", 0.75) and not forzar:
+            zona = "cierre_sugerido"
+            motivos.insert(0, f"Riesgo bajo ({risk:.2f}) y confianza alta ({conf:.2f})")
+            qa = tz.get("muestreo_qa_cierres", 0)
+            if int(hashlib.sha256(("qa-v1:" + case.alert_id).encode()).hexdigest(), 16) % 100 < qa * 100:
+                zona = "revision_humana"
+                forzar.append(f"Muestreo de control de calidad ({qa:.0%} de los cierres sugeridos)")
+        else:
+            zona = "revision_humana"
+            if not forzar:
+                motivos.insert(0, f"Zona gris: riesgo {risk:.2f}, confianza {conf:.2f}")
+        case.shared.update({"riesgo": risk, "confianza": conf, "zona": zona,
+                            "motivos_triaje": forzar + motivos, "forzado_humano": bool(forzar)})
+        self.log.add("orquestador", "triaje.calculado",
+                     {"riesgo": risk, "confianza": conf, "zona": zona, "motivos": forzar + motivos,
+                      "hallazgos_riesgo": len(risk_f), "mitigacion": round(mitig, 2),
+                      "formula_riesgo": "1-Π(1-sev·w_confianza) × (1-0.6·mitigación)"}, alert_id=case.alert_id)
         return risk
 
     def suggestion(self, case: Case) -> str:
-        r, a = case.shared.get("riesgo", 0), self.policy["autonomia"]
-        if r < a["sugerir_descartar_si_riesgo_menor_a"]:
+        z, r = case.shared.get("zona"), case.shared.get("riesgo", 0)
+        if z == "cierre_sugerido":
             return "sugerir_descartar"
-        if r >= 0.5:
+        if z == "escalamiento" or r >= 0.5:
             return "sugerir_escalar_ros"
         return "sugerir_vigilancia"
 
@@ -200,10 +263,46 @@ class Orchestrator:
         return dec
 
     def reidentify(self, alert_id: str, actor: str = HUMANO) -> dict:
+        if actor not in self.policy["autonomia"].get("roles_con_reidentificacion", [HUMANO]):
+            self.log.add(actor, "permiso.denegado", {"accion": "reidentificar"}, status="alerta", alert_id=alert_id)
+            raise PermissionError("Solo el Oficial de Cumplimiento puede ver los datos reales del cliente")
         a = self.alerts[alert_id]
         self.log.add(actor, "privacidad.reidentificacion", {"motivo": "consulta del oficial"},
                      status="alerta", alert_id=alert_id)
         return {k: a.get(k) for k in self.policy["campos_privados"] + ["account"] if k in a}
+
+    # ------------------------------------------------------------------ lote / operación
+    def investigate_all(self, on_progress: Callable[[int, int, str], None] | None = None) -> None:
+        ids = [a for a in self.alerts if a not in self.cases]
+        for i, aid in enumerate(ids, start=1):
+            self.investigate(aid)
+            if on_progress:
+                on_progress(i, len(ids), aid)
+
+    def zone_of(self, alert_id: str) -> str | None:
+        c = self.cases.get(alert_id)
+        return c.shared.get("zona") if c else None
+
+    def approve_batch(self, actor: str, role: str) -> list[str]:
+        """El oficial aprueba en lote los cierres sugeridos; cada uno queda con su sustento de no reporte firmado."""
+        done = []
+        for aid, c in self.cases.items():
+            if c.shared.get("zona") != "cierre_sugerido" or aid in self.decisions:
+                continue
+            draft = next((f["reasoning"] for f in c.findings if f["kind"] == "borrador"), "")
+            just = ("Aprobado en lote: cierre sugerido por riesgo bajo y confianza alta. Sustento de no reporte:\n"
+                    + draft[:1500])
+            self.decide(aid, actor, role, "descartar", just)
+            done.append(aid)
+        self.log.add(actor, "humano.aprobacion_lote", {"alertas": done}, alert_id="-")
+        return done
+
+    def reset(self) -> None:
+        for aid in list(self.cases):
+            self.log.clear(aid)
+        self.log.clear("-")
+        self.cases.clear()
+        self.decisions.clear()
 
     # ------------------------------------------------------------------ expediente
     def export(self, alert_id: str) -> dict:
