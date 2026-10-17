@@ -243,13 +243,24 @@ def documents_block(aid: str) -> None:
 
 def ask_block(aid: str) -> None:
     with st.container(border=True):
-        st.markdown("#### 💬 Pedir más información a un agente")
+        st.markdown("#### 💬 Pregúntale a un agente")
         ag = st.selectbox("Agente", [n for n in o.agents if n not in ("agente_redactor", "agente_extraccion")],
                           key=f"ask_ag_{aid}", format_func=lambda n: ui.AGENT_NAME.get(n, n))
-        q = st.text_input("Pregunta", placeholder="¿La contraparte principal tiene historial previo?", key=f"q_{aid}")
-        if st.button("Preguntar", key=f"askb_{aid}") and q:
-            o.ask(aid, ag, q)
-            st.rerun()
+        with st.form(f"ask_form_{aid}", clear_on_submit=True, border=False):
+            q = st.text_input("Pregunta", placeholder="¿La contraparte principal tiene historial previo?", key=f"q_{aid}")
+            sent = st.form_submit_button("Preguntar")
+        if sent and q.strip():
+            with st.spinner(f"{ui.AGENT_NAME.get(ag, ag)} está revisando el caso…"):
+                o.ask(aid, ag, q.strip())
+        st.caption("Ideas: contrapartes e historial · efectivo · exterior · perfil e ingreso · documentos · ¿por qué el riesgo?")
+        resp = [f for f in o.cases[aid].findings if f["kind"] == "respuesta"]
+        for f in reversed(resp[-4:]):
+            with st.chat_message("user"):
+                st.markdown(f["extra"].get("pregunta") or f["claim"].replace("Respuesta a: ", ""))
+            with st.chat_message("assistant", avatar=ui.AGENT_ICON.get(f["agent"], "🤖")):
+                st.markdown(f"**{ui.AGENT_NAME.get(f['agent'], f['agent'])}** "
+                            f"<small>({'🧠 LLM' if f['extra'].get('modo_llm') in ('llm', 'cache') else '⚙️ reglas'} · "
+                            f"firma <code>{f['signature'][:8]}…</code>)</small><br>{f['reasoning']}", unsafe_allow_html=True)
 
 
 def expediente_block(aid: str) -> None:
@@ -401,6 +412,7 @@ def render_client(aid: str) -> None:
     if zona == "cierre_sugerido":
         st.success("✓ **Sin señales de riesgo relevantes.** El sistema sugiere cerrar; tú confirmas con un clic.")
         decision_block(aid, case, zona)
+        ask_block(aid)
         with st.expander("Ver el detalle (auditoría)"):
             ficha_block(case)
             findings_block(aid, case, ["riesgo", "mitigante", "respuesta", "info", "norma"], ())
