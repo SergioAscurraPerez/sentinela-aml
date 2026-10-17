@@ -233,28 +233,44 @@ KYC_DEMO = {
     "A-002": ("persona_natural", "Estudiante universitario", 300, 3),
     "A-003": ("empresa", "Empresa textil (fabricación de prendas)", 110_000, 72),
 }
-OCUPACIONES = [("persona_natural", "Empleado dependiente", (800, 4_000)),
-               ("persona_natural", "Profesional independiente", (1_500, 8_000)),
-               ("persona_natural", "Comerciante", (1_000, 10_000)),
-               ("persona_natural", "Estudiante", (0, 600)),
-               ("empresa", "Pequeña empresa", (10_000, 80_000))]
+def kyc(alerts: list[dict], df: pd.DataFrame | None = None, seed: int = 11) -> pd.DataFrame:
+    """Perfil KYC por cuenta alertada (ingreso mensual declarado en USD).
 
-
-def kyc(alerts: list[dict], seed: int = 11) -> pd.DataFrame:
-    """Perfil KYC sintético por cuenta alertada (ingreso mensual declarado en USD).
-
-    Para las alertas de SAML-D/IBM el perfil se sortea SIN mirar la etiqueta real,
-    para no inflar la métrica.
+    - Alertas de demo: perfil fijo (KYC_DEMO).
+    - Alertas de SAML-D/IBM: el perfil se DERIVA del historial de la cuenta ANTERIOR a la ventana de la alerta
+      (lo que el cliente "declaró" al abrir la cuenta se parece a cómo operaba antes), nunca de la etiqueta.
+      Sin historial previo -> cliente nuevo con un perfil personal modesto.
     """
     rng = random.Random(seed)
+    fx = {"GBP": 1.27, "EUR": 1.08, "USD": 1.0, "PEN": 0.27}
+    if df is not None and len(df):
+        df = df.copy()
+        df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601")
     rows = []
     for a in alerts:
+        acc = a["account"]
         if a["alert_id"] in KYC_DEMO:
             seg, ocu, ing, ant = KYC_DEMO[a["alert_id"]]
         else:
-            seg, ocu, (lo, hi) = rng.choice(OCUPACIONES)
-            ing, ant = rng.randint(lo, hi), rng.randint(1, 120)
-        rows.append({"cuenta": a["account"], "segmento": seg, "ocupacion": ocu,
+            hist = pd.DataFrame()
+            if df is not None and len(df):
+                cut = pd.Timestamp(a["fecha"]) - pd.Timedelta(days=35)
+                hist = df[((df.sender == acc) | (df.receiver == acc)) & (df.timestamp < cut)]
+            if len(hist) < 3:
+                seg, ocu = "persona_natural", rng.choice(["Empleado dependiente", "Comerciante", "Profesional independiente"])
+                ing, ant = rng.randint(800, 3_000), rng.randint(1, 5)
+            else:
+                months = max((hist.timestamp.max() - hist.timestamp.min()).days / 30, 1)
+                vol = max(hist[hist.receiver == acc].amount.sum(), hist[hist.sender == acc].amount.sum())
+                ing = int(vol / months * fx.get(a.get("moneda", "USD"), 1.0) * 1.2)
+                ant = int(months) + rng.randint(6, 36)
+                if ing > 30_000:
+                    seg, ocu = "empresa", "Empresa (comercio / servicios)"
+                elif ing > 6_000:
+                    seg, ocu = "persona_natural", "Comerciante"
+                else:
+                    seg, ocu = "persona_natural", rng.choice(["Empleado dependiente", "Profesional independiente"])
+        rows.append({"cuenta": acc, "segmento": seg, "ocupacion": ocu,
                      "ingreso_mensual_usd": ing, "antiguedad_meses": ant})
     return pd.DataFrame(rows)
 
@@ -275,7 +291,7 @@ def main() -> None:
         df, alerts = pd.concat([df, d2], ignore_index=True), alerts + a2
 
     df.to_csv(DATA / "transactions.csv", index=False)
-    kyc(alerts).to_csv(DATA / "clientes.csv", index=False)
+    kyc(alerts, df).to_csv(DATA / "clientes.csv", index=False)
     (DATA / "alerts.json").write_text(json.dumps(alerts, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"{len(df):,} transacciones, {len(alerts)} alertas -> data/transactions.csv, data/alerts.json")
 
