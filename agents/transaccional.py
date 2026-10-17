@@ -23,6 +23,9 @@ class AgenteTransaccional(Agent):
             "cycle": A.detect_cycles(nb, acc, pol),
             "pass_through": A.detect_pass_through(w, acc, pol),
         }
+        det["smurfing"] = A.detect_smurfing(w, acc, pol)
+        det["concentracion_dispersion"] = A.detect_gather_scatter(w, acc, pol)
+        det["cambio_comportamiento"] = A.detect_behaviour_change(w, acc, case.alert["fecha"], pol)
         fan = A.detect_fan(w, acc, pol) or {}
         det.update(fan)
         det = {k: v for k, v in det.items() if v}
@@ -32,7 +35,7 @@ class AgenteTransaccional(Agent):
 
         feats = {"perfil": {**prof, "total_entrante": amount_band(prof["total_entrante"]),
                             "total_saliente": amount_band(prof["total_saliente"])},
-                 "tipologias": {k: {kk: (amount_band(vv) if kk in ("total", "monto_min", "monto_max", "monto_promedio")
+                 "tipologias": {k: {kk: (amount_band(vv) if kk in ("total", "monto_min", "monto_max", "monto_promedio", "semana_actual", "media_semanal")
                                          else vv) for kk, vv in v.items() if kk != "evidencia"}
                                 for k, v in det.items()}}
         case.shared["rasgos_transaccionales"] = case.pseudo.scrub(feats)
@@ -47,7 +50,8 @@ class AgenteTransaccional(Agent):
             feats, fb)
         expl = data.get("explicaciones") or fb["explicaciones"]
 
-        sev = {"structuring": 0.8, "cycle": 0.85, "pass_through": 0.6, "fan_in": 0.5, "fan_out": 0.4}
+        sev = {"structuring": 0.8, "cycle": 0.85, "pass_through": 0.6, "fan_in": 0.5, "fan_out": 0.4,
+               "smurfing": 0.75, "concentracion_dispersion": 0.7, "cambio_comportamiento": 0.55}
         out = []
         for k, v in det.items():
             s = sev.get(k, 0.4)
@@ -84,6 +88,15 @@ class AgenteTransaccional(Agent):
         if k == "pass_through":
             intl = " con salida internacional" if v["salida_internacional"] else ""
             return f"Pass-through: sale el {v['ratio_salida_entrada']:.0%} de lo que entra{intl}"
+        if k == "smurfing":
+            return (f"Pitufeo: {v['n_operaciones']} ingresos pequeños desde {v['contrapartes']} cuentas suman "
+                    f"{amount_band(v['total'])} en {v['dias']} días (umbral {v['umbral']:,.0f})")
+        if k == "concentracion_dispersion":
+            return (f"Concentración-dispersión ({v['patron']}): {v['contrapartes_entrada']} cuentas → {t} → "
+                    f"{v['contrapartes_salida']} cuentas en < 72 h")
+        if k == "cambio_comportamiento":
+            extra = f"; tipos de pago nuevos: {', '.join(v['tipos_pago_nuevos'])}" if v["tipos_pago_nuevos"] else ""
+            return f"Cambio de comportamiento: última semana {amount_band(v['semana_actual'])} (z = {v['z']}){extra}"
         if k in ("fan_in", "fan_out"):
             return f"{k}: {v['contrapartes_dia']} contrapartes distintas en un día ({v['dia']})"
         return k
@@ -97,4 +110,7 @@ class AgenteTransaccional(Agent):
             "pass_through": "La cuenta funciona como puente: los fondos salen casi en su totalidad poco después de entrar.",
             "fan_in": "Muchas contrapartes distintas depositan el mismo día.",
             "fan_out": "La cuenta paga a muchas cuentas distintas el mismo día; puede ser legítimo (planilla) o dispersión.",
+            "smurfing": "Muchos ingresos pequeños de distintas cuentas que juntos superan el umbral: pitufeo.",
+            "concentracion_dispersion": "Los fondos se concentran y se reparten en pocas horas: la cuenta actúa como nodo de paso.",
+            "cambio_comportamiento": "El volumen o el tipo de operaciones de la última semana no se parece al historial de la cuenta.",
         }.get(k, "Patrón detectado por regla.")

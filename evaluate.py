@@ -1,10 +1,14 @@
-"""Métrica de impacto: corre el pipeline sobre todas las alertas y compara con la etiqueta real.
+"""Métrica de impacto (modo sombra): corre el pipeline sobre todas las alertas y compara con la etiqueta real.
 
-    python evaluate.py            # usa data/alerts.json (sintético + SAML-D/IBM si lo preparaste)
+    python evaluate.py            # usa data/alerts.json; guarda data/metricas.json
 """
 from __future__ import annotations
 
+import json
 import time
+from collections import Counter
+from datetime import datetime
+from pathlib import Path
 
 from core.orchestrator import Orchestrator
 
@@ -15,17 +19,27 @@ def main() -> None:
     for aid, a in o.alerts.items():
         t = time.perf_counter()
         c = o.investigate(aid)
-        sug = o.suggestion(c)
-        rows.append((aid, a.get("etiqueta_real"), c.shared["riesgo"], sug, time.perf_counter() - t))
-    tp = sum(1 for r in rows if r[1] != "Normal" and r[3] != "sugerir_descartar")
-    fn = sum(1 for r in rows if r[1] != "Normal" and r[3] == "sugerir_descartar")
-    tn = sum(1 for r in rows if r[1] == "Normal" and r[3] == "sugerir_descartar")
-    fp = sum(1 for r in rows if r[1] == "Normal" and r[3] != "sugerir_descartar")
+        rows.append({"alerta": aid, "real": a.get("etiqueta_real"), "riesgo": c.shared["riesgo"],
+                     "confianza": c.shared["confianza"], "zona": c.shared["zona"], "seg": time.perf_counter() - t})
     for r in rows:
-        print(f"{r[0]:8} real={r[1]:<18} riesgo={r[2]:.2f} {r[3]:<20} {r[4]:.2f}s")
-    n = len(rows)
-    print(f"\nAlertas: {n} · tiempo medio {sum(r[4] for r in rows)/n:.2f}s/alerta (total {time.perf_counter()-t0:.1f}s)")
-    print(f"Recall lavado (no descartadas): {tp}/{tp+fn} · Falsos positivos filtrados: {tn}/{tn+fp}")
+        print(f"{r['alerta']:7} real={str(r['real'])[:20]:<20} riesgo={r['riesgo']:.2f} conf={r['confianza']:.2f} {r['zona']:<16} {r['seg']:.2f}s")
+    lav = [r for r in rows if r["real"] and r["real"] != "Normal"]
+    nor = [r for r in rows if r["real"] == "Normal"]
+    det = sum(r["zona"] != "cierre_sugerido" for r in lav)
+    filt = sum(r["zona"] == "cierre_sugerido" for r in nor)
+    esc = sum(r["zona"] == "escalamiento" for r in lav)
+    m = {"fecha": datetime.now().isoformat(timespec="minutes"), "alertas": len(rows),
+         "lavado_no_cerrado": f"{det}/{len(lav)}", "lavado_escalado": f"{esc}/{len(lav)}",
+         "normales_a_cierre_sugerido": f"{filt}/{len(nor)}",
+         "zonas": dict(Counter(r["zona"] for r in rows)),
+         "seg_por_alerta": round(sum(r["seg"] for r in rows) / max(len(rows), 1), 2),
+         "lavado_que_iria_a_cierre": [r["alerta"] + " " + str(r["real"]) for r in lav if r["zona"] == "cierre_sugerido"]}
+    Path("data/metricas.json").write_text(json.dumps(m, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"\nAlertas: {len(rows)} · {m['seg_por_alerta']} s/alerta (total {time.perf_counter()-t0:.1f}s)")
+    print(f"Lavado que NO se va a cierre sugerido: {det}/{len(lav)} · escalado directo: {esc}/{len(lav)}")
+    print(f"Normales que van a cierre sugerido (ahorro): {filt}/{len(nor)} · Zonas: {m['zonas']}")
+    if m["lavado_que_iria_a_cierre"]:
+        print("Revisar (lavado que se iría a cierre):", ", ".join(m["lavado_que_iria_a_cierre"]))
 
 
 if __name__ == "__main__":
