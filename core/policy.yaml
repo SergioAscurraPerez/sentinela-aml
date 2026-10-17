@@ -25,6 +25,7 @@ forzar_humano_si:
   monto_mayor_a_usd: 100000      # pico de ingresos en 30 días
   pocas_transacciones: 5         # menos de N transacciones en la ventana
   sin_perfil_kyc: true
+  patron_nunca_visto_percentil: 99   # modelo ML (agente_anomalia) sin ninguna regla activada
 
 perfil:
   estudiante_max_mensual_usd: 13500   # ~ S/ 50,000 (ejemplo de la diapositiva 4)
@@ -74,3 +75,19 @@ llm:
   usar_cache: false            # demo 100% en vivo: cada razonamiento se genera en el momento
 
 entrada_alertas: json          # adaptador: json | csv | api
+
+# Ficha de fraccionamiento (8 parámetros, ventana de 30 días). Valores iniciales: calibrar con el banco.
+fraccionamiento:
+  cerca_umbral_banda: [0.80, 0.99]   # % del umbral de registro (US$ 10,000 convertido a la moneda de la alerta)
+  cerca_umbral_min: 3                # peso 2
+  depositantes_min: 4                # peso 2
+  canales_mismo_dia_min: 3           # peso 1
+  dias_consecutivos_min: 5           # peso 1
+  montos_repetidos_min: 3            # peso 1
+  relacion_ingreso_max: 3            # recibido > 3× ingreso mensual -> peso 2
+  salida_rapida_min: 0.70            # > 70% sale en 48 h -> peso 1
+  triaje: {revision: 3, critico: 6}  # 0-2 pasa · 3-5 revisión · 6+ crítico
+
+# Modelo de anomalía (IsolationForest, sin etiquetas)
+anomalia:
+  percentil_alerta: 97

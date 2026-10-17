@@ -1,0 +1,8 @@
+pais,lista,severidad,fuente
+Iran,GAFI llamado a la acción,0.8,GAFI · jurisdicciones de alto riesgo (verificar vigencia)
+North Korea,GAFI llamado a la acción,0.8,GAFI · jurisdicciones de alto riesgo (verificar vigencia)
+Myanmar,GAFI llamado a la acción,0.8,GAFI · jurisdicciones de alto riesgo (verificar vigencia)
+Nigeria,lista interna del banco (sintética),0.35,Matriz de riesgo país del banco (sintética para la demo)
+UAE,lista interna del banco (sintética),0.3,Matriz de riesgo país del banco (sintética para la demo)
+Pakistan,lista interna del banco (sintética),0.3,Matriz de riesgo país del banco (sintética para la demo)
+Albania,lista interna del banco (sintética),0.3,Matriz de riesgo país del banco (sintética para la demo)

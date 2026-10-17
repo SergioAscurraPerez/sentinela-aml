@@ -33,6 +33,7 @@ class AgentePerfil(Agent):
                                  extra={"sin_perfil": True})]
 
         ingreso = float(prof["ingreso_mensual_usd"])
+        case.raw["ingreso_mensual_usd"] = ingreso
         pico_usd = A.peak_30d_inflow(case.window, case.account) * fx
         ratio = pico_usd / max(ingreso, 1.0)
         nuevo = int(prof["antiguedad_meses"]) < pol.get("forzar_humano_si", {}).get("cliente_nuevo_meses", 6)
