@@ -31,8 +31,11 @@ class AgenteRedactor(Agent):
         payload = {"tipo": tipo, "riesgo": risk, "senales": [f["claim"] for f in risk_f],
                    "mitigantes": [f["claim"] for f in mit], "normas": normas}
         data, meta = self.ask_llm(case, f"Redacta un párrafo de 'Análisis' (4-6 frases, tono formal) para un {tipo} "
-                                        "basado SOLO en estos hallazgos. JSON: {\"analisis\": str}",
-                                  payload, {"analisis": ""})
+                                        "y un resumen ejecutivo de máximo 3 frases para el Oficial de Cumplimiento "
+                                        "(qué pasó, por qué importa y qué se recomienda), basado SOLO en estos hallazgos. "
+                                        'JSON: {"analisis": str, "resumen_ejecutivo": str}',
+                                  payload, {"analisis": "", "resumen_ejecutivo": ""})
+        case.shared["resumen_ejecutivo"] = data.get("resumen_ejecutivo") or ""
         txt = base_txt + ("\n\nAnálisis:\n" + data["analisis"] if data.get("analisis") else "")
         return [self.finding(case, tipo, "borrador", 0.0, [], f"{self.name} ({meta['modo']})", txt, kind="borrador",
                              extra={"tipo": "ros" if ros else "no_reporte", "modo_llm": meta["modo"]})]
