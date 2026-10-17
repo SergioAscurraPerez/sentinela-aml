@@ -246,7 +246,8 @@ class Orchestrator:
                justification2: str | None = None) -> dict:
         pol = self.policy["autonomia"]
         case = self.cases[alert_id]
-        if actor != HUMANO or role not in pol["roles_con_decision"]:
+        permitido = pol.get("permisos_por_rol", {}).get(role, [])
+        if actor not in (HUMANO, ANALISTA) or actor != role or action not in permitido:
             self.log.add(actor, "permiso.denegado", {"accion": action, "rol": role,
                                                      "regla": "acciones_prohibidas_a_agentes"},
                          status="alerta", alert_id=alert_id)
@@ -260,6 +261,9 @@ class Orchestrator:
         dec = {"alert_id": alert_id, "accion": action, "actor": actor, "rol": role, "riesgo": risk,
                "justificacion": justification, "justificacion_2": justification2,
                "sugerencia_sistema": self.suggestion(case), "ts": now.isoformat(timespec="seconds")}
+        if action == "escalar_oficial":
+            dec["destino"] = HUMANO
+            dec["estado"] = "pendiente_oficial"   # el plazo de 24 h del ROS corre cuando el oficial la califica
         if action == "escalar_ros":
             dec["calificada_sospechosa_en"] = dec["ts"]
             dec["vence_ros"] = (now + timedelta(hours=self.policy["plazo_ros_horas"])).isoformat(timespec="seconds")
@@ -291,6 +295,21 @@ class Orchestrator:
             self.score(case)
             self.redraft(alert_id)
         return doc
+
+    def clients(self) -> list[dict]:
+        """Directorio de clientes (core bancario simulado): cada DNI enlazado a su cuenta del dataset."""
+        seen: dict[str, dict] = {}
+        for aid, al in self.alerts.items():
+            dni = "".join(ch for ch in str(al.get("documento_identidad", "")) if ch.isdigit())
+            if dni:
+                c = seen.setdefault(dni, {"dni": dni, "nombre": al.get("nombre_cliente", ""), "alertas": []})
+                c["alertas"].append(aid)
+        return list(seen.values())
+
+    def consult(self, dni: str) -> str | None:
+        """Consulta por DNI: ubica la cuenta del cliente y devuelve la alerta (ventana) más reciente a analizar."""
+        hits = self.find_by_dni(dni)
+        return max(hits, key=lambda a: self.alerts[a]["fecha"]) if hits else None
 
     def find_by_dni(self, dni: str) -> list[str]:
         """Consulta por DNI (vista del analista): devuelve las alertas del cliente; el DNI no se registra en claro."""

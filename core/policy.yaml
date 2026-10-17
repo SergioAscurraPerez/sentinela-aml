@@ -9,7 +9,12 @@ autonomia:
   # Acciones que ningún agente puede ejecutar: solo el rol humano "oficial_cumplimiento".
   acciones_prohibidas_a_agentes: [cerrar_alerta, descartar, escalar_ros, enviar_ros, contactar_cliente]
   # Roles humanos con permiso de decisión. El analista valida hallazgos y pregunta; el oficial firma.
-  roles_con_decision: [oficial_cumplimiento]
+  roles_con_decision: [analista_aml, oficial_cumplimiento]
+  # Qué puede firmar cada rol humano. El analista es el usuario del sistema; el oficial recibe los escalamientos
+  # y es el único que califica la operación como sospechosa (ROS a la UIF-Perú).
+  permisos_por_rol:
+    analista_aml: [descartar, vigilancia, escalar_oficial]
+    oficial_cumplimiento: [descartar, vigilancia, escalar_oficial, escalar_ros]
   roles_con_reidentificacion: [oficial_cumplimiento]
 
 # Triaje por confianza (diapositivas 5-6). Ninguna zona cierra sola: "cierre sugerido" lo aprueba un humano.

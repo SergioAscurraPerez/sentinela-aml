@@ -52,7 +52,7 @@ def _is_free(model: str) -> bool:
 class LocalLLM:
     def __init__(self, policy: dict, log: EventLog):
         cfg = policy.get("llm", {})
-        self.provider_cfg = cfg.get("proveedor", "auto")
+        self.provider_cfg = os.getenv("SENTINELA_LLM") or cfg.get("proveedor", "auto")   # ej. SENTINELA_LLM=ninguno
         self.url = cfg.get("url", "http://localhost:11434").rstrip("/")
         self.ollama_model = cfg.get("modelo", "qwen2.5:3b")
         models = cfg.get("modelos_openrouter") or [cfg.get("modelo_openrouter", "openrouter/free")]
