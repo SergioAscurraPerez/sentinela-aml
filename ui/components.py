@@ -76,9 +76,12 @@ def hero(titulo: str, meta: str, zona: str | None, zona_label: str | None, motiv
 
 
 AGENT_ICON = {"agente_transaccional": "🕸️", "agente_perfil": "🪪", "agente_listas": "📋", "agente_normativo": "⚖️",
-              "abogado_del_diablo": "😈", "agente_redactor": "📝"}
+              "abogado_del_diablo": "😈", "agente_redactor": "📝", "agente_fraccionamiento": "🧮",
+              "agente_anomalia": "🤖", "agente_extraccion": "📄"}
 AGENT_NAME = {"agente_transaccional": "Transaccional", "agente_perfil": "Perfil KYC", "agente_listas": "Listas PEP / sanciones",
-              "agente_normativo": "Normativo SBS", "abogado_del_diablo": "Abogado del diablo", "agente_redactor": "Redactor ROS"}
+              "agente_normativo": "Normativo SBS", "abogado_del_diablo": "Abogado del diablo", "agente_redactor": "Redactor ROS",
+              "agente_fraccionamiento": "Ficha de fraccionamiento", "agente_anomalia": "Anomalía ML",
+              "agente_extraccion": "Extracción de documentos"}
 
 
 def agent_grid(state: dict[str, dict]) -> str:

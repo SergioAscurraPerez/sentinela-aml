@@ -32,7 +32,8 @@ ZONAS = {"cierre_sugerido": "🟢 Cierre sugerido", "revision_humana": "🟡 Rev
          "escalamiento": "🔴 Escalamiento"}
 
 # orden fijo de capacidades que el orquestador busca en el registro
-PIPELINE = ["analisis_transaccional", "perfil_cliente", "screening_listas", "normativa", "contraargumento"]
+PIPELINE = ["analisis_transaccional", "perfil_cliente", "scorecard_fraccionamiento", "anomalia_ml",
+            "extraccion_documentos", "screening_listas", "normativa", "contraargumento"]
 
 
 class Orchestrator:
@@ -51,6 +52,7 @@ class Orchestrator:
         self.alerts = {a["alert_id"]: a for a in json.loads((DATA / "alerts.json").read_text(encoding="utf-8"))}
         self.cases: dict[str, Case] = {}
         self.decisions: dict[str, dict] = {}
+        self.documents: dict[str, list[dict]] = {}   # documentos de origen de fondos por alerta
 
     # ------------------------------------------------------------------ investigación
     def investigate(self, alert_id: str, on_step: Callable[[str, str, list[dict]], None] | None = None) -> Case:
@@ -67,6 +69,7 @@ class Orchestrator:
         pol["fx_a_usd"] = pol.get("fx_a_usd_por_moneda", {}).get(alert.get("moneda", "USD"), 1.0)
         case = Case(alert=alert, policy=pol, llm=self.llm, pseudo=Pseudonymizer(), window=w,
                     neighborhood=nb, forbidden=forbidden)
+        case.raw["documentos"] = self.documents.get(alert_id, [])
         self.cases[alert_id] = case
         self.log.add("orquestador", "privacidad.pseudonimizacion",
                      {"campos_protegidos": self.policy["campos_privados"], "cuenta": case.token,
@@ -165,6 +168,11 @@ class Orchestrator:
         if case.raw.get("cliente_nuevo"):
             conf -= 0.15
             forzar.append(f"Cliente nuevo (< {fh.get('cliente_nuevo_meses', 6)} meses)")
+        pct = case.shared.get("anomalia_percentil")
+        nunca = fh.get("patron_nunca_visto_percentil")
+        if nunca and pct is not None and pct >= nunca and not risk_f:
+            conf -= 0.15
+            forzar.append(f"Patrón nunca visto: el modelo ML lo ubica en el percentil {pct:.0f} y ninguna regla lo explica")
         pico_usd = A.peak_30d_inflow(case.window, case.account) * case.policy.get("fx_a_usd", 1.0)
         if pico_usd > fh.get("monto_mayor_a_usd", 1e18):
             forzar.append(f"Monto muy alto: {pico_usd:,.0f} USD en 30 días")
@@ -262,6 +270,39 @@ class Orchestrator:
                      alert_id=alert_id)
         return dec
 
+    def attach_document(self, alert_id: str, name: str, data: bytes, actor: str = ANALISTA) -> dict:
+        """Recibe un documento de origen de fondos: huella sha256 + registro NANDA; si el caso existe, lo analiza."""
+        from agents.extraccion import fingerprint
+        doc = {"nombre": name, "data": data, "sha256": fingerprint(data), "bytes": len(data)}
+        doc["fact_id"] = self.town.facts.attest("agente_extraccion", alert_id, "documento_recibido",
+                                                {"nombre": name, "sha256": doc["sha256"]})
+        self.documents.setdefault(alert_id, []).append(doc)
+        self.log.add(actor, "documento.recibido", {"nombre": name, "sha256": doc["sha256"], "bytes": len(data)},
+                     alert_id=alert_id)
+        case = self.cases.get(alert_id)
+        if case:
+            case.raw["documentos"] = self.documents[alert_id]
+            ag = self.agents["agente_extraccion"]
+            self.log.add(ag.name, "agente.inicio", {"capacidades": ag.capabilities}, alert_id=alert_id)
+            with Timer() as t:
+                f = ag.analyze(case, doc)
+            self.submit_finding(alert_id, self.town.sign_finding(ag.name, f))
+            self.log.add(ag.name, "agente.fin", {"hallazgos": 1}, latency_ms=t.ms, alert_id=alert_id)
+            self.score(case)
+            self.redraft(alert_id)
+        return doc
+
+    def find_by_dni(self, dni: str) -> list[str]:
+        """Consulta por DNI (vista del analista): devuelve las alertas del cliente; el DNI no se registra en claro."""
+        digits = "".join(ch for ch in dni if ch.isdigit())
+        if len(digits) < 6:
+            return []
+        hits = [a for a, al in self.alerts.items()
+                if digits in "".join(ch for ch in str(al.get("documento_identidad", "")) if ch.isdigit())]
+        self.log.add(ANALISTA, "consulta.dni", {"dni_sha256": hashlib.sha256(digits.encode()).hexdigest()[:16],
+                                                "alertas": hits}, alert_id="-")
+        return hits
+
     def reidentify(self, alert_id: str, actor: str = HUMANO) -> dict:
         if actor not in self.policy["autonomia"].get("roles_con_reidentificacion", [HUMANO]):
             self.log.add(actor, "permiso.denegado", {"accion": "reidentificar"}, status="alerta", alert_id=alert_id)
@@ -328,6 +369,8 @@ class Orchestrator:
             "cuenta_pseudonimo": case.token,
             "riesgo": case.shared.get("riesgo"),
             "hallazgos": case.findings,
+            "documentos": [{k: d[k] for k in ("nombre", "sha256", "bytes", "fact_id")}
+                           for d in self.documents.get(alert_id, [])],
             "decision": self.decisions.get(alert_id),
             "bitacora": self.log.list(alert_id),
         }

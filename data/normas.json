@@ -6,7 +6,7 @@
       "norma": "Res. SBS N° 2660-2015, art. 49",
       "tema": "registro_operaciones",
       "texto": "Registro de operaciones únicas iguales o superiores a US$ 10,000; operaciones múltiples que individualmente superen US$ 1,000 y en conjunto sumen US$ 50,000 o más en un mes calendario.",
-      "tipologias": ["structuring", "smurfing", "fan_in", "fan_out", "concentracion_dispersion", "efectivo_recurrente"],
+      "tipologias": ["structuring", "smurfing", "fan_in", "fan_out", "concentracion_dispersion", "efectivo_recurrente", "fraccionamiento"],
       "fuente": "https://img.lpderecho.pe/wp-content/uploads/2017/10/LEGIS.PE-Reglamento-de-gestión-de-riesgos-de-lavado-de-activos-y-financiamiento-del-terrorismo.pdf"
     },
     {
@@ -14,7 +14,7 @@
       "norma": "Ley N° 27693, art. 11",
       "tema": "definiciones",
       "texto": "Operación inusual: cuantía, características y periodicidad no guardan relación con la actividad económica del cliente. Operación sospechosa: no tiene un fundamento económico o lícito aparente.",
-      "tipologias": ["structuring", "smurfing", "cycle", "pass_through", "fan_in", "fan_out", "concentracion_dispersion", "cambio_comportamiento", "perfil_vs_monto", "dispersion_sin_fondeo", "efectivo_recurrente", "transfronterizo", "actividad_subita"],
+      "tipologias": ["structuring", "smurfing", "cycle", "pass_through", "fan_in", "fan_out", "concentracion_dispersion", "cambio_comportamiento", "perfil_vs_monto", "dispersion_sin_fondeo", "efectivo_recurrente", "transfronterizo", "actividad_subita", "fraccionamiento", "jurisdiccion", "anomalia_ml", "origen_fondos"],
       "fuente": "https://contralaft.gob.pe/"
     },
     {
@@ -54,7 +54,7 @@
       "norma": "Señales de alerta (Anexo del Reglamento SBS LA/FT)",
       "tema": "senal_alerta",
       "texto": "El cliente realiza de forma reiterada operaciones fraccionadas.",
-      "tipologias": ["structuring", "smurfing", "efectivo_recurrente"],
+      "tipologias": ["structuring", "smurfing", "efectivo_recurrente", "fraccionamiento"],
       "fuente": "https://www.howdengroup.com/sites/peru.howdenprod.com/files/2024-10/manual-gremial-para-la-prevencion-del-laft.pdf"
     }
   ]
