@@ -64,6 +64,6 @@ llm:
   url: http://localhost:11434
   modelo: qwen2.5:7b
   timeout_s: 60
-  usar_cache: true
+  usar_cache: false            # demo 100% en vivo: cada razonamiento se genera en el momento
 
 entrada_alertas: json          # adaptador: json | csv | api

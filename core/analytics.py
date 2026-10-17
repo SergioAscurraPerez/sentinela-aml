@@ -15,10 +15,23 @@ import pandas as pd
 TX_PATH = Path(__file__).resolve().parent.parent / "data" / "transactions.csv"
 
 
+_LIVE: list[pd.DataFrame] = []   # transacciones creadas en vivo durante la demo
+
+
+def add_live_transactions(df: pd.DataFrame) -> None:
+    """Agrega transacciones generadas en vivo y refresca la caché."""
+    df = df.copy()
+    df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601")
+    _LIVE.append(df)
+    load_tx.cache_clear()
+
+
 @lru_cache(maxsize=1)
 def load_tx(path: str = str(TX_PATH)) -> pd.DataFrame:
     df = pd.read_csv(path)
     df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601")
+    if _LIVE:
+        df = pd.concat([df, *_LIVE], ignore_index=True)
     return df
 
 
