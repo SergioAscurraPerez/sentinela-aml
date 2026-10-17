@@ -203,3 +203,77 @@ def swimlane_df(events: list[dict]) -> pd.DataFrame:
                          "estado": e["status"], "ms": ms})
             t += ms
     return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------- paso a paso (narración amigable de la bitácora)
+_KIND_TXT = {"riesgo": "una señal de riesgo", "mitigante": "una explicación legítima", "norma": "una norma aplicable",
+             "info": "un dato de contexto", "borrador": "el borrador del reporte", "respuesta": "una respuesta"}
+
+
+def _who(actor: str) -> str:
+    if actor in AGENT_NAME:
+        return f"{AGENT_ICON.get(actor, '🤖')} {AGENT_NAME[actor]}"
+    return {"orquestador": "🎛️ Orquestador", "analista_aml": "🧑‍💻 Analista", "oficial_cumplimiento": "🧑‍⚖️ Oficial",
+            "jurado": "🧪 Jurado"}.get(actor, f"🤖 {actor}")
+
+
+def narrate(events: list[dict], agent: str | None = None) -> list[dict]:
+    """Convierte la bitácora técnica en pasos legibles: [{hora, quien, que, estado}]."""
+    steps = []
+    for e in events:
+        k, d, a = e["kind"], e["detail"], e["actor"]
+        if agent and a != agent and d.get("agente") != agent:
+            continue
+        ms = f" ({e['latency_ms'] / 1000:.1f} s)" if e.get("latency_ms") else ""
+        txt = None
+        if k == "alerta.recibida":
+            txt = "Recibió la consulta y ocultó los datos personales antes de repartir el trabajo."
+        elif k == "privacidad.pseudonimizacion":
+            txt = (f"Reemplazó la cuenta por **{d.get('cuenta')}** y preparó {d.get('transacciones_en_ventana')} "
+                   "transacciones para los agentes (ningún nombre ni DNI sale de aquí).")
+        elif k == "registry.descubrimiento":
+            txt = (f"Buscó en el registro NANDA quién sabe de *{str(d.get('capacidad', '')).replace('_', ' ')}* y "
+                   f"encontró a {_who(d.get('agente', ''))} (identidad verificada).")
+        elif k == "agente.inicio":
+            txt = "Empezó a trabajar."
+        elif k == "llm.llamada":
+            modo = d.get("modo")
+            txt = {"llm": f"Le pidió al modelo de lenguaje que explique lo encontrado{ms}. Solo le mostró datos "
+                          "pseudonimizados (míralo en *Privacidad y auditoría*).",
+                   "cache": "Reutilizó una explicación del modelo ya generada (caché).",
+                   "bloqueado": "Iba a consultar al modelo, pero la guardia de privacidad lo bloqueó."}.get(
+                       modo, "Redactó su explicación con una plantilla de reglas (LLM apagado).")
+        elif k == "llm.error":
+            txt = "El modelo no respondió a tiempo; usó su plantilla de reglas para no frenar el caso."
+        elif k == "hallazgo.firmado":
+            txt = (f"Firmó **{_KIND_TXT.get(d.get('kind'), d.get('kind'))}**: {d.get('claim')} "
+                   f"· severidad {float(d.get('severidad', 0)):.2f}")
+        elif k == "hallazgo.rechazado":
+            txt = f"⛔ Rechazó un hallazgo con firma inválida que decía venir de {d.get('dice_ser')}."
+        elif k == "agente.fin":
+            txt = f"Terminó{ms}: entregó {d.get('hallazgos', 0)} hallazgos firmados."
+        elif k == "agente.error":
+            txt = f"Tuvo un error ({str(d.get('error', ''))[:80]}); el caso siguió con los demás agentes."
+        elif k == "triaje.calculado":
+            nivel = {"cierre_sugerido": "🟢 pasa", "revision_humana": "🟡 revisión manual",
+                     "escalamiento": "🔴 crítico"}.get(d.get("zona"), d.get("zona"))
+            mot = "; ".join(d.get("motivos", [])[:2])
+            txt = (f"Juntó {d.get('hallazgos_riesgo', 0)} señales de riesgo → riesgo **{d.get('riesgo')}**, confianza "
+                   f"**{d.get('confianza')}** → **{nivel}**" + (f". Motivo: {mot}" if mot else "."))
+        elif k == "gate.humano":
+            txt = "Dejó el caso esperando la firma del analista: ningún agente puede cerrar ni escalar."
+        elif k == "documento.recibido":
+            txt = f"Recibió el documento *{d.get('nombre')}* y registró su huella sha256 `{str(d.get('sha256'))[:12]}…`."
+        elif k == "humano.feedback":
+            txt = (f"Marcó un hallazgo de {_who(d.get('agente', ''))} como {'válido ✅' if d.get('valido') else 'incorrecto ❌'}"
+                   f"; la confianza en ese agente quedó en {d.get('nueva_confianza')}.")
+        elif k == "humano.pregunta":
+            txt = f"Preguntó a {_who(d.get('agente', ''))}: “{d.get('pregunta')}”"
+        elif k == "humano.decision":
+            txt = f"Firmó la decisión: **{str(d.get('accion', '')).replace('_', ' ')}**."
+        elif k == "permiso.denegado":
+            txt = f"⛔ Intentó «{d.get('accion')}» sin permiso: bloqueado por la política del banco."
+        if txt:
+            steps.append({"hora": e["ts"][11:], "quien": _who(a), "que": txt,
+                          "estado": "⚠️" if e["status"] in ("alerta", "error") else "✓"})
+    return steps
