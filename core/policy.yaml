@@ -60,10 +60,17 @@ fx_a_usd: 1.0                  # se sobrescribe por caso según la moneda de la 
 campos_privados: [nombre_cliente, documento_identidad, cuenta_real, direccion, telefono]
 
 llm:
-  proveedor: ollama            # ollama | ninguno
+  proveedor: auto              # auto (Ollama si corre, si no OpenRouter) | ollama | openrouter | ninguno
   url: http://localhost:11434
-  modelo: qwen2.5:7b
-  timeout_s: 60
+  modelo: qwen2.5:3b           # Ollama local (CPU). Con GPU NVIDIA: qwen2.5:7b
+  # OpenRouter (requiere OPENROUTER_API_KEY en el entorno o en .streamlit/secrets.toml).
+  # Solo modelos GRATUITOS (:free): si uno está saturado (429) se prueba el siguiente.
+  solo_modelos_gratis: true    # candado de costos: un modelo de pago en la lista se ignora
+  modelos_openrouter:
+    - nvidia/nemotron-3-super-120b-a12b:free   # ~12 s por llamada, buen español
+    - google/gemma-4-31b-it:free
+    - openrouter/free                          # enrutador gratuito de OpenRouter (último recurso)
+  timeout_s: 45
   usar_cache: false            # demo 100% en vivo: cada razonamiento se genera en el momento
 
 entrada_alertas: json          # adaptador: json | csv | api
