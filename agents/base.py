@@ -76,12 +76,15 @@ class Agent:
         return case.llm.json_chat(self.name, SYSTEM_BASE, user, fallback, case.forbidden)
 
     def answer(self, case: Case, question: str) -> dict:
-        """Responde una pregunta del oficial (human-in-the-loop: 'pedir más información')."""
-        payload = {"pregunta_del_oficial": question, "cuenta": case.token, "rasgos": case.shared}
-        fb = {"respuesta": "No tengo datos suficientes para responder con certeza; se requiere revisión manual.",
-              "confianza": 0.3}
-        data, meta = self.ask_llm(case, "Responde la pregunta del oficial de cumplimiento usando solo los rasgos. "
+        """Responde una pregunta del analista (human-in-the-loop: 'pedir más información') con hechos del caso."""
+        from .consulta import case_facts, rule_answer
+        facts = case_facts(case)
+        fb = {"respuesta": rule_answer(question, facts), "confianza": 0.7}
+        payload = {"pregunta_del_analista": question, "rol_del_agente": self.description, "hechos_del_caso": facts}
+        data, meta = self.ask_llm(case, "Responde la pregunta del analista AML en 2-4 frases, desde tu especialidad, "
+                                        "usando SOLO los hechos del caso (cita cuentas CTA_### y rangos tal como vienen). "
+                                        "Si los hechos no alcanzan, dilo y sugiere qué revisar. "
                                         'JSON: {"respuesta": str, "confianza": 0-1}', payload, fb)
         return self.finding(case, f"Respuesta a: {question}", "consulta", 0.0, [], f"{self.name} ({meta['modo']})",
                             str(data.get("respuesta")), kind="respuesta",
-                            extra={"confianza": data.get("confianza"), "modo_llm": meta["modo"]})
+                            extra={"confianza": data.get("confianza"), "modo_llm": meta["modo"], "pregunta": question})
