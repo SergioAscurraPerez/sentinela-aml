@@ -21,8 +21,8 @@ class AgentePerfil(Agent):
     def run(self, case: Case) -> list[dict]:
         pol = case.policy
         fx = pol.get("fx_a_usd", 1.0)
-        prof = None
-        if CLIENTES.exists():
+        prof = dict(case.alert["kyc"], cuenta=case.account) if case.alert.get("kyc") else None
+        if prof is None and CLIENTES.exists():
             df = pd.read_csv(CLIENTES)
             hit = df[df.cuenta == case.account]
             prof = hit.iloc[0].to_dict() if len(hit) else None

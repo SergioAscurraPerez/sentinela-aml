@@ -279,6 +279,18 @@ class Orchestrator:
             if on_progress:
                 on_progress(i, len(ids), aid)
 
+    def add_live_alert(self, tipo: str, params: dict, ocupacion: str) -> str:
+        """Crea una alerta nueva en vivo (transacciones nuevas) y la deja lista para investigar."""
+        from .live import generate
+        seq = 1 + sum(1 for a in self.alerts if a.startswith("L-"))
+        df, alert = generate(tipo, params, ocupacion, seq)
+        A.add_live_transactions(df)
+        self.alerts[alert["alert_id"]] = alert
+        self.log.add("jurado", "alerta.creada_en_vivo",
+                     {"tipologia_elegida": tipo, "transacciones_nuevas": len(df), "parametros": params},
+                     alert_id=alert["alert_id"])
+        return alert["alert_id"]
+
     def zone_of(self, alert_id: str) -> str | None:
         c = self.cases.get(alert_id)
         return c.shared.get("zona") if c else None

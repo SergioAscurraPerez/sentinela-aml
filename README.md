@@ -20,6 +20,8 @@ Hack AI Agents Impact · NTT DATA × Sundai LATAM × Project NANDA (MIT Media La
 | 🧑‍⚖️ **Human-in-the-loop** | Roles **Analista** (valida y pregunta) y **Oficial de Cumplimiento** (firma y aprueba en lote los cierres sugeridos). Validar/rechazar cada hallazgo (cambia la confianza en el agente y el riesgo), pedir más información a un agente, decisión final firmada **solo por el Oficial de Cumplimiento**, justificación obligatoria, doble justificación si descarta riesgo alto, reloj de 24 h al calificar |
 | 🔒 **Privacidad** | LLM **local** (Ollama) + pseudonimización (CTA_###, montos en rangos) + guardia que bloquea cualquier prompt con datos sensibles. Panel "Lo que vio el modelo" |
 | 🛰️ **Seguimiento** | Sala de control en vivo, bitácora SQLite de cada paso (actor, herramienta, latencia), expediente exportable con hash y botón **Verificar** |
+| 🧪 **Demo 100% en vivo** | El jurado crea una alerta en el momento (tipología y montos, o **sorpresa** con tipología oculta); se generan transacciones nuevas y los agentes la investigan desde cero. Caché del LLM apagada por defecto |
+| 🕸️ **Grafo con replay** | Grafo interactivo (vis-network embebido, funciona sin internet) que reproduce el movimiento del dinero en orden cronológico; tamaño = volumen, naranja = evidencia |
 | 😈 **Agente impostor** | Intenta colar un "descartar" suplantando a otro agente → firma inválida → rechazado y registrado |
 
 ## Arquitectura
